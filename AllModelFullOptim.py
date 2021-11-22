@@ -420,7 +420,6 @@ if (t == NbRound*n):
     eq_reached = 0
     print("Network equilibrium not reached")
 
-print(g.diameter())
 
 total_time = (datetime.datetime.now() - starting_time).total_seconds()
 
@@ -487,8 +486,13 @@ if simple_export:
     else:
         simple_export_filename = "simple_dyn_results.txt"
     with open(simple_export_filename, "a") as myfile:
-        myfile.write(str(n) + ' ' + str(c) + ' ' + str(cc) + ' ' + str(sigma_w) + ' ' + str(sigma_z) + ' ' + str(sigma_b) + ' ' \
-        + topology + ' ' + str(eq_reached) + ' ' + str(r) + ' ' + str(rewiring_ts) + ' ' + str(total_time) + ' ' + str(min_score) + "\n")
+        myfile.write(
+            str(n) + ' ' + str(c) + ' ' + str(cc) + ' ' + str(sigma_w) + ' ' \
+            + str(sigma_z) + ' ' + str(sigma_b) + ' ' + topology + ' ' \
+            + str(g.diameter()) + ' ' + str(tier) + ' ' \
+            + str(eq_reached) + ' ' + str(r) + ' ' + str(rewiring_ts) + ' ' \
+            + str(total_time) + ' ' + str(min_score) + "\n"
+        )
 
 if export_initntw_experiment:
     simple_export_filename = "tmp/initntw_experiment.txt"
@@ -506,8 +510,13 @@ if simple_export_with_giniNbNet:
     else:
         simple_export_filename = "simple_dyn_results.txt"
     with open(simple_export_filename, "a") as myfile:
-        myfile.write(str(n) + ' ' + str(c) + ' ' + str(cc) + ' ' + str(sigma_w) + ' ' + str(sigma_z) + ' ' + str(sigma_b) + ' ' \
-        + topology + ' ' + str(eq_reached) + ' ' + str(r) + ' ' + str(rewiring_ts) + ' ' + str(total_time) + ' ' + str(gini) + ' ' + str(nb_unique_ntw) + "\n")
+        myfile.write(
+            str(n) + ' ' + str(c) + ' ' + str(cc) + ' ' + str(sigma_w) + ' ' \
+            + str(sigma_z) + ' ' + str(sigma_b) + ' ' + topology + ' ' + str(tier) \
+            + ' ' + str(eq_reached) + ' ' + str(r) + ' ' + str(rewiring_ts) + ' ' \
+            + str(total_time) + ' ' + str(min_score) + ' ' \
+            + str(gini) + ' ' + str(nb_unique_ntw) + "\n"
+        )
 
 if simple_export_with_gini:
     if simple_export_suffix is not None:
@@ -515,8 +524,13 @@ if simple_export_with_gini:
     else:
         simple_export_filename = "simple_dyn_results.txt"
     with open(simple_export_filename, "a") as myfile:
-        myfile.write(str(n) + ' ' + str(c) + ' ' + str(cc) + ' ' + str(sigma_w) + ' ' + str(sigma_z) + ' ' + str(sigma_b) + ' ' \
-        + topology + ' ' + str(eq_reached) + ' ' + str(r) + ' ' + str(rewiring_ts) + ' ' + str(total_time) + ' ' + str(gini) + ' ' + str(min_score) + "\n")
+        myfile.write(
+            str(n) + ' ' + str(c) + ' ' + str(cc) + ' ' + str(sigma_w) + ' ' \
+            + str(sigma_z) + ' ' + str(sigma_b) + ' ' + topology + ' ' + str(tier) \
+            + ' ' + str(eq_reached) + ' ' + str(r) + ' ' + str(rewiring_ts) + ' ' \
+            + str(total_time) + ' ' + str(min_score) + ' ' \
+            + str(gini) + ' ' + "\n"
+        )
         
 del(g, tech_graph, W, Mbar, Wbar, nb_suppliers, supplier_id_list, alternate_supplier_id_list, nb_extra_suppliers)
 del(total_time, rewiring_ts, utility_ts)
