@@ -1,7 +1,7 @@
 from __future__ import division
 # Load stuff
 import sys
-sys.path.insert(0,'/usr/lib64/python2.6/site-packages')
+sys.path.insert(0,'env/site-packages')
 import igraph
 import pandas as pd
 import numpy as np
