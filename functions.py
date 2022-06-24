@@ -144,35 +144,47 @@ def computePartialEquilibriumAndProfit(a, b, z, W, n, wealth, eq, W_tm1, firms_w
         np.transpose(np.array([eq['X'][firms_within_tiers] * eq['P'][firms_within_tiers],]))
     ).flatten()
     inter_demand_from_outside = inter_demand_last_timestep - inter_demand_last_timestep_from_reduced
-    #print(inter_demand_last_timestep)
-    #print(inter_demand_last_timestep_from_reduced)
-    #print(inter_demand_from_outside)
-    #print(hh_demand_reduced + np.transpose(np.array([inter_demand_from_outside,])))
     Wtilde_reduced = (1 - a_reduced) * b_reduced * W_reduced
     tV_reduced = np.linalg.solve(
         np.eye(n_reduced) - Wtilde_reduced, 
         hh_demand_reduced + np.transpose(np.array([inter_demand_from_outside,]))
     )
     V_reduced = np.transpose(tV_reduced)
-    #print(V_reduced)
+    print(
+        "prod:", eq['X'][firms_within_tiers], 
+        ", price:", eq['P'][firms_within_tiers], 
+        ", old V:", eq['P'][firms_within_tiers] * eq['X'][firms_within_tiers], 
+        ", new V:", V_reduced
+    )
+
+
 
     # Second equation: labor market balance
     #firms_not_within_tiers = [id for id in list(range(n)) if id not in firms_within_tiers]
     work_supply_last_timestep = sum([eq['X'][i] * eq['P'][i] / eq['h'] * a[i] * b[i] for i in firms_within_tiers])
     h_reduced = np.sum(a_reduced * b_reduced * V_reduced) / work_supply_last_timestep
+    print("old wage:", eq['h'], "new wage:", h_reduced)
+    
     
     # Third equation: optimum production
     deltaW_reduced = W_reduced.sum(axis=0) - 1
     bModif_reduced = b_reduced * (1 + deltaW_reduced * (1 - a_reduced))
     #input_factor_last_timestep = (1 - a) * b * W * eq['P'] * eq['X'] / np.transpose(eq['P'])
-    input_factor_last_timestep = np.sum((1 - a) * b * W * np.log(np.transpose(np.array([eq['P'],]))), axis=1)[firms_within_tiers]
-    input_factor_last_timestep_from_reduced = np.sum((1 - a_reduced) * b_reduced * W_reduced * np.log(np.transpose(np.array([eq['P'][firms_within_tiers],]))), axis=1)
+    input_factor_last_timestep = np.sum((1 - a) * b * W_tm1 * np.log(np.transpose(np.array([eq['P'],]))), axis=1)[firms_within_tiers]
+    input_factor_last_timestep_from_reduced = np.sum((1 - a_reduced) * b_reduced * W_tm1_reduced * np.log(np.transpose(np.array([eq['P'][firms_within_tiers],]))), axis=1)
     input_factor_last_timestep_from_outside = input_factor_last_timestep - input_factor_last_timestep_from_reduced
     # replace 0 by 1 so that it does not create an issue with log
     #input_factor_last_timestep_from_outside[input_factor_last_timestep_from_outside == 0] = 1
-    #print(input_factor_last_timestep_from_outside)
+    print("input_factor_last_timestep_from_reduced", input_factor_last_timestep_from_reduced, "input_factor_last_timestep_from_outside", input_factor_last_timestep_from_outside)
     #print('bModif', np.min(bModif), np.max(bModif))
-
+    print(a_reduced * b_reduced * np.log(h_reduced) - np.log(z_reduced) - bModif_reduced * np.log(b_reduced) - (bModif_reduced - 1) * np.log(V_reduced))
+    print(a_reduced * b_reduced * np.log(h_reduced) - np.log(z_reduced) - bModif_reduced * np.log(b_reduced) - (bModif_reduced - 1) * np.log(V_reduced) + np.array([input_factor_last_timestep_from_outside,]))
+    '''print(np.transpose(a_reduced * b_reduced * np.log(h_reduced) \
+            - np.log(z_reduced) \
+            - bModif_reduced * np.log(b_reduced) \
+            - (bModif_reduced - 1) * np.log(V_reduced) \
+            + np.array([input_factor_last_timestep_from_outside,])
+        ))'''
     tlogP_reduced = np.linalg.solve(
         np.transpose(np.eye(n_reduced) - Wtilde_reduced), 
         np.transpose(a_reduced * b_reduced * np.log(h_reduced) \
@@ -183,9 +195,16 @@ def computePartialEquilibriumAndProfit(a, b, z, W, n, wealth, eq, W_tm1, firms_w
         )
     )
     logP_reduced = np.transpose(tlogP_reduced)
+    print(logP_reduced)
     P_reduced = np.exp(logP_reduced)
+    #print(P_reduced)
     X_reduced = V_reduced / P_reduced
+    print("old P:", eq['P'][firms_within_tiers], "new P:", P_reduced)
+    print("old X:", eq['X'][firms_within_tiers], "new X:", X_reduced)
 
+    # try to implement as in text. We don't do "input_factor_last_timestep_from_reduced". We know the last prices of the suppliers...
+    exit()
+    
     # Build Partial Eq
     P_reduced = P_reduced.flatten()
     X_reduced = X_reduced.flatten()
@@ -331,6 +350,6 @@ def drawRandomVectorNormal(mean, sd, n, min_val=None, max_val=None):
 
 
 def identifyFirmsWithinTier(id_firm, g, tier):
-    neighboors = g.neighborhood(vertices=id_firm, order=tier, mode='all', mindist=0)
+    neighboors = g.neighborhood(vertices=id_firm, order=tier, mode='all')
     neighboors.sort()
     return neighboors

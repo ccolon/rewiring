@@ -248,7 +248,7 @@ for r in range(1, NbRound + 1):
                 W[id_replaced_supplier, id_rewiring_firm] = 0 # on enleve ce lien dans le W
                 # If firms are myopic, they anticipate their new profit based on the current equilibrium
                 # they do not take into account the impact of their rewiring on the system
-                if myopic and (tier == 0):
+                if myopic and (tier < 0):
                     estimated_new_profit = computeProfit(id_rewiring_firm, a, b, W, eq['X'], eq['P'], eq['h'])
                     # new_eq = computeEquilibrium2(a, b, z, W, n, wealth, shot_firm)
                     # new_profit = computeProfit(id_rewiring_firm, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
@@ -257,7 +257,7 @@ for r in range(1, NbRound + 1):
                     # exit()
                 # If firms are myopic but takes into account some tier
                 # then need to identify the firms within those tiers
-                elif myopic and (tier >= 1):
+                elif myopic and (tier >= 0):
                     # need to update g igraph object so that we can apply the neighboorhood function
                     g.delete_edges([(id_replaced_supplier, id_rewiring_firm)])
                     g.add_edge(id_visited_supplier, id_rewiring_firm)
@@ -271,6 +271,10 @@ for r in range(1, NbRound + 1):
                     g.delete_edges([(id_visited_supplier, id_rewiring_firm)])
                     g.add_edge(id_replaced_supplier, id_rewiring_firm)
                     partial_eq, estimated_new_profit = computePartialEquilibriumAndProfit(a, b, z, W, n, wealth, eq, W_last_ts, firms_within_tiers, id_rewiring_firm, shot_firm)
+                    
+                    #print(id_rewiring_firm, firms_within_tiers, partial_eq, estimated_new_profit,
+                    #computeProfit(id_rewiring_firm, a, b, W, eq['X'], eq['P'], eq['h'])
+                    #exit()
                     # new_eq = computeEquilibrium2(a, b, z, W, n, wealth, shot_firm)
                     # new_profit = computeProfit(id_rewiring_firm, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
                     # print("estimated_new_profit:", estimated_new_profit)
@@ -288,11 +292,11 @@ for r in range(1, NbRound + 1):
                     potential_profit = estimated_new_profit
                     if myopic: # if myopic, the realized full equilibrium is computed after rewiring is done
                         new_eq = computeEquilibrium2(a, b, z, W, n, wealth, shot_firm)
-                        if tier > 0:
+                        #if tier > 0:
                             #print('partial h:', partial_eq['h'], 'new h:', new_eq['h'])
                             #print('partial P:', partial_eq['P'], 'new P:', new_eq['P'][partial_eq['firms_within_tiers']])
                             #print('partial X:', partial_eq['X'], 'new X:', new_eq['X'][partial_eq['firms_within_tiers']])
-                            print('estimated_new_profit', estimated_new_profit, "new_profit", computeProfit(id_rewiring_firm, a, b, W, new_eq['X'], new_eq['P'], new_eq['h']))
+                            #print('estimated_new_profit', estimated_new_profit, "new_profit", computeProfit(id_rewiring_firm, a, b, W, new_eq['X'], new_eq['P'], new_eq['h']))
 
                     eq = new_eq
                     rewiring = 1
