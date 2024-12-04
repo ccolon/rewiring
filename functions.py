@@ -1,4 +1,7 @@
-def computeEquilibrium(a, b, z, W, n, wealth, shot_firm=None):
+import numpy as np
+
+
+def compute_equilibrium(a, b, z, W, n, wealth, shot_firm=None):
     #start = time.clock()
     # first equation: good market balance
     Wtilde = (1-a) * b * W
@@ -23,7 +26,7 @@ def computeEquilibrium(a, b, z, W, n, wealth, shot_firm=None):
     return {"X":X.flatten(), "P":P.flatten(), "h": h}
 
 
-def computeEquilibrium2(a, b, z, W, n, wealth, shot_firm=None): # with solve instead of inv
+def compute_equilibrium2(a, b, z, W, n, wealth, shot_firm=None): # with solve instead of inv
     #start = time.clock()
     # first equation: good market balance
     if shot_firm==None:
@@ -93,25 +96,14 @@ def computeEquilibrium2(a, b, z, W, n, wealth, shot_firm=None): # with solve ins
         #print('Optim good conditions:', dif5)
         
         # Bilan
-        print(dif1.any(), dif2.any(), dif3.any(), dif4.any(), dif5.any())
+        print((dif1.any(), dif2.any(), dif3.any(), dif4.any(), dif5.any()))
     #eq3 = time.clock()
     #print("eq3", eq3 - eq2)
     #return
     return {"X":X.flatten(), "P":P.flatten(), "h": h}
 
-# test:
-#np.sum(a*b*P*X)/h
 
-#np.power(np.full(n,h), a*b) / (z * np.power(b,b) * np.power(V, b-1)) * np.prod(np.power(np.dot(np.transpose(P),np.ones([1,3])), (1-a)*b*W), axis=0)
-#P
-#z*np.power(b,b) * np.power(P,b) * np.power(X,b) * np.power(np.full(n,h), -a*b) *  np.prod(np.power(np.dot(np.transpose(P),np.ones([1,3])), -(1-a)*b*W), axis=0)
-#X
-#G = (1-a)*W*b*P/np.transpose(P)*X
-#L = a*b*P/h*X
-#Profit = P*X - h*L - np.dot(P, G)
-
-
-def computePartialEquilibriumAndProfit(a, b, z, W, n, wealth, eq, W_tm1, firms_within_tiers, id_rewiring_firm, shot_firm):
+def compute_partial_equilibrium_and_profit(a, b, z, W, n, wealth, eq, W_tm1, firms_within_tiers, id_rewiring_firm, shot_firm):
     '''Compute equilibrium for selected firms only
     Suppose that the firm doing this calculation knows:
     - prices, production, wage from last time step
@@ -150,12 +142,12 @@ def computePartialEquilibriumAndProfit(a, b, z, W, n, wealth, eq, W_tm1, firms_w
         hh_demand_reduced + np.transpose(np.array([inter_demand_from_outside,]))
     )
     V_reduced = np.transpose(tV_reduced)
-    print(
+    print((
         "prod:", eq['X'][firms_within_tiers], 
         ", price:", eq['P'][firms_within_tiers], 
         ", old V:", eq['P'][firms_within_tiers] * eq['X'][firms_within_tiers], 
         ", new V:", V_reduced
-    )
+    ))
 
 
 
@@ -163,7 +155,7 @@ def computePartialEquilibriumAndProfit(a, b, z, W, n, wealth, eq, W_tm1, firms_w
     #firms_not_within_tiers = [id for id in list(range(n)) if id not in firms_within_tiers]
     work_supply_last_timestep = sum([eq['X'][i] * eq['P'][i] / eq['h'] * a[i] * b[i] for i in firms_within_tiers])
     h_reduced = np.sum(a_reduced * b_reduced * V_reduced) / work_supply_last_timestep
-    print("old wage:", eq['h'], "new wage:", h_reduced)
+    print(("old wage:", eq['h'], "new wage:", h_reduced))
     
     
     # Third equation: optimum production
@@ -175,10 +167,10 @@ def computePartialEquilibriumAndProfit(a, b, z, W, n, wealth, eq, W_tm1, firms_w
     input_factor_last_timestep_from_outside = input_factor_last_timestep - input_factor_last_timestep_from_reduced
     # replace 0 by 1 so that it does not create an issue with log
     #input_factor_last_timestep_from_outside[input_factor_last_timestep_from_outside == 0] = 1
-    print("input_factor_last_timestep_from_reduced", input_factor_last_timestep_from_reduced, "input_factor_last_timestep_from_outside", input_factor_last_timestep_from_outside)
+    print(("input_factor_last_timestep_from_reduced", input_factor_last_timestep_from_reduced, "input_factor_last_timestep_from_outside", input_factor_last_timestep_from_outside))
     #print('bModif', np.min(bModif), np.max(bModif))
-    print(a_reduced * b_reduced * np.log(h_reduced) - np.log(z_reduced) - bModif_reduced * np.log(b_reduced) - (bModif_reduced - 1) * np.log(V_reduced))
-    print(a_reduced * b_reduced * np.log(h_reduced) - np.log(z_reduced) - bModif_reduced * np.log(b_reduced) - (bModif_reduced - 1) * np.log(V_reduced) + np.array([input_factor_last_timestep_from_outside,]))
+    print((a_reduced * b_reduced * np.log(h_reduced) - np.log(z_reduced) - bModif_reduced * np.log(b_reduced) - (bModif_reduced - 1) * np.log(V_reduced)))
+    print((a_reduced * b_reduced * np.log(h_reduced) - np.log(z_reduced) - bModif_reduced * np.log(b_reduced) - (bModif_reduced - 1) * np.log(V_reduced) + np.array([input_factor_last_timestep_from_outside,])))
     '''print(np.transpose(a_reduced * b_reduced * np.log(h_reduced) \
             - np.log(z_reduced) \
             - bModif_reduced * np.log(b_reduced) \
@@ -199,8 +191,8 @@ def computePartialEquilibriumAndProfit(a, b, z, W, n, wealth, eq, W_tm1, firms_w
     P_reduced = np.exp(logP_reduced)
     #print(P_reduced)
     X_reduced = V_reduced / P_reduced
-    print("old P:", eq['P'][firms_within_tiers], "new P:", P_reduced)
-    print("old X:", eq['X'][firms_within_tiers], "new X:", X_reduced)
+    print(("old P:", eq['P'][firms_within_tiers], "new P:", P_reduced))
+    print(("old X:", eq['X'][firms_within_tiers], "new X:", X_reduced))
 
     # try to implement as in text. We don't do "input_factor_last_timestep_from_reduced". We know the last prices of the suppliers...
     exit()
@@ -220,14 +212,14 @@ def computePartialEquilibriumAndProfit(a, b, z, W, n, wealth, eq, W_tm1, firms_w
     #exit()
     # Compute profit
     firm_id_reduced = firms_within_tiers.index(id_rewiring_firm)
-    profit = computeProfit(firm_id_reduced, a_reduced, b_reduced, W_reduced, X_reduced, P_reduced, h_reduced)
+    profit = compute_profit(firm_id_reduced, a_reduced, b_reduced, W_reduced, X_reduced, P_reduced, h_reduced)
 
     return partial_eq, profit
 
 
 
 
-def computeProfit(firm_id, a, b, W, X, P, h):
+def compute_profit(firm_id, a, b, W, X, P, h):
     '''Compute profit of a firm
     
     Parameters
@@ -258,21 +250,15 @@ def computeProfit(firm_id, a, b, W, X, P, h):
     return profit;
 
 
-# Compute distance btw ntw. First version, using adjacency matrix
-def computeDistanceBtwNtw(g1, g2):
+def compute_distance_btw_ntw(g1, g2):
+    # Compute distance btw ntw. First version, using adjacency matrix
     M1 = np.array(g1.get_adjacency().data)
     M2 = np.array(g2.get_adjacency().data)
     return np.sum(np.sum(M1 * M2)) / np.sqrt(g1.ecount() * g2.ecount())
 
-#t = time.process_time()
-#computeDistanceBtwNtw(g1, g2)
-#print(time.process_time() - t)
-#t = time.process_time()
-#computeDistanceBtwNtw2(g1, g2)
-#print(time.process_time() - t)
 
-# Compute distance btw ntw. Second version, using edgelist
-def computeDistanceBtwNtw2(g1, g2):
+def compute_distance_btw_ntw2(g1, g2):
+    # Compute distance btw ntw. Second version, using edgelist
     EL1 = np.array(g1.get_edgelist())
     EL2 = np.array(g2.get_edgelist())
     nbCommonRowsOf2dArrays(EL1, EL2)
@@ -293,7 +279,7 @@ def nbCommonRowsOf2dArrays(A, B):
 
 ### Hamiltonian
 
-def evaluateBestAlternativeProfit(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm):
+def evaluate_best_alternative_profit(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm):
     """Compute the best profit reachable by a switch
     Non myopic version: the firm update the W based on the switch and compute the new network-wide equilibrium
     """
@@ -303,8 +289,8 @@ def evaluateBestAlternativeProfit(firm_id, a, b, z, W, n, wealth, Wbar, supplier
         for id_replaced_supplier in supplier_id_list[firm_id]:
             #print('test', firm_id, id_replaced_supplier, id_visited_supplier)
             W[id_replaced_supplier, firm_id] = 0 # on enleve ce lien dans le W
-            new_eq = computeEquilibrium2(a, b, z, W, n, wealth, shot_firm)
-            new_profit = computeProfit(firm_id, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
+            new_eq = compute_equilibrium2(a, b, z, W, n, wealth, shot_firm)
+            new_profit = compute_profit(firm_id, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
             if new_profit>max_profit:
                 max_profit = new_profit
             W[id_replaced_supplier, firm_id] = Wbar[id_replaced_supplier, firm_id] #apres le test d'un supplier, on remet le lien dans W
@@ -312,12 +298,12 @@ def evaluateBestAlternativeProfit(firm_id, a, b, z, W, n, wealth, Wbar, supplier
     return max_profit
 
 
-def evalutePenalty(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm):
+def evalute_penalty(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm):
     """Compute the difference between the current profit and the max profit reachable by a switch
     """
-    eq = computeEquilibrium2(a, b, z, W, n, wealth, shot_firm)
-    current_profit = computeProfit(firm_id, a, b, W, eq['X'], eq['P'], eq['h'])
-    max_alternative_profit = evaluateBestAlternativeProfit(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
+    eq = compute_equilibrium2(a, b, z, W, n, wealth, shot_firm)
+    current_profit = compute_profit(firm_id, a, b, W, eq['X'], eq['P'], eq['h'])
+    max_alternative_profit = evaluate_best_alternative_profit(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
     dif = max_alternative_profit - current_profit
     if dif<=0:
         #print('Firm '+str(firm_id)+': at the best profit')
@@ -327,15 +313,15 @@ def evalutePenalty(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alter
         return abs(dif)
 
 
-def computeScore(a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm):
+def compute_score(a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm):
     '''Compute a network-level metric. It is the sum of all so-called firm-level penalty.
     A firm's penalty is the difference between the maximum profit reachable with perfect anticipation and the current profit 
     '''
-    all_indiv_score = [evalutePenalty(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm) for firm_id in range(n)]
+    all_indiv_score = [evalute_penalty(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm) for firm_id in range(n)]
     return sum(all_indiv_score)
 
 
-def drawRandomVectorNormal(mean, sd, n, min_val=None, max_val=None):
+def draw_random_vector_normal(mean, sd, n, min_val=None, max_val=None):
     vec = np.random.normal(mean, sd, n)
     if min_val or max_val:
         for k in range(len(vec)):
@@ -348,8 +334,7 @@ def drawRandomVectorNormal(mean, sd, n, min_val=None, max_val=None):
     return vec
 
 
-
-def identifyFirmsWithinTier(id_firm, g, tier):
+def identify_firms_within_tier(id_firm, g, tier):
     neighboors = g.neighborhood(vertices=id_firm, order=tier, mode='all')
     neighboors.sort()
     return neighboors

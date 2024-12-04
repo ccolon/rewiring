@@ -1,14 +1,52 @@
+import os
+import random
+import subprocess
+import sys
+
+import igraph
+import numpy as np
+import pandas as pd
+
+from functions import draw_random_vector_normal, compute_equilibrium2, compute_score, compute_profit, identify_firms_within_tier, \
+    compute_partial_equilibrium_and_profit
+from generate_network import initialize_graph, create_technology_graph, identify_suppliers, get_tech_matrix, \
+    get_initial_matrices
+from parameters import *
+
+# Model parameters
+if len(sys.argv) > 1:
+    sigma_w = float(sys.argv[5])
+    sigma_z = float(sys.argv[6])
+    sigma_b = float(sys.argv[7])
+    sigma_a = float(sys.argv[8])
+    rewiring_test = 'try_all'
+
+
+    # Whether or not to reuse an existing graph
+    if sys.argv[9] == "inputed":
+        inputed_network = True
+        novelty_suffix = ""
+    else:
+        inputed_network = False
+        novelty_suffix = '_NEWNET'
+
+    # Do runs
+    NbRound = int(sys.argv[2])
+    n = int(sys.argv[3])
+    c = 4
+    cc = int(sys.argv[4])
+
 #================================================================================
 # Retrieve parameter name
 exp_name = exp_type
 # Start counting time
-starting_time = datetime.datetime.now()
+starting_time = datetime.now()
 
 
 #================================================================================
 # Parameters that need n
 wealth = n
-nb_extra_suppliers=np.full(n, cc)
+nb_extra_suppliers = np.full(n, cc)
 
 # Economic parameters: global return to scale b
 # b
@@ -16,24 +54,24 @@ nb_extra_suppliers=np.full(n, cc)
 eps = 5e-2
 min_b = eps
 max_b = 1-eps
-b = drawRandomVectorNormal(0.9, sigma_b, n, min_b, max_b)
+b = draw_random_vector_normal(0.9, sigma_b, n, min_b, max_b)
 #nb_different = 30
 #b[0:nb_different] = b[0:nb_different]+1
-print("b: min "+str(min(b))+' max '+str(max(b)))
+print(("b: min "+str(min(b))+' max '+str(max(b))))
 
 # Economic parameters: labor share a
 eps = 5e-2
 min_a = eps
-a = np.array([drawRandomVectorNormal(0.5, sigma_a, n, min_a, min((1-eps)/item, 1-eps))[0] for item in list(b)])
+a = np.array([draw_random_vector_normal(0.5, sigma_a, n, min_a, min((1 - eps) / item, 1 - eps))[0] for item in list(b)])
 #a = drawRandomVectorNormal(0.5, sigma_a, n, min_a, max_a)
-print("a: min "+str(min(a))+' max '+str(max(a)))
+print(("a: min "+str(min(a))+' max '+str(max(a))))
 #a[2] = 0.97
 
 # Economic parameters: Productivity z
 #z = np.full(n, 1.0)
 min_z = 1e-1
-z = drawRandomVectorNormal(1, sigma_z, n, min_val=min_z)
-print("z: min "+str(min(z))+' max '+str(max(z)))
+z = draw_random_vector_normal(1, sigma_z, n, min_val=min_z)
+print(("z: min "+str(min(z))+' max '+str(max(z))))
 
 
 #================================================================================
@@ -41,46 +79,56 @@ print("z: min "+str(min(z))+' max '+str(max(z)))
 ## Option 1: Load existing network. needs g0, techgraph, M0, W0, c
 if inputed_network: 
     subfolder = 'initial_network'
-    g0 = igraph.load(subfolder+'/'+'g0'+'.'+format_graph, format=format_graph)
+    initial_graph = igraph.load(subfolder + '/' + 'g0' + '.' + format_graph, format=format_graph)
     tech_graph = igraph.load(subfolder+'/'+'tech_graph'+'.'+format_graph, format=format_graph)
-    nb_suppliers = np.array(g0.degree(list(range(n)), mode="in"))
-    M0 = np.array(g0.get_adjacency(attribute=None).data)
+    nb_suppliers = np.array(initial_graph.degree(list(range(n)), mode="in"))
+    M0 = np.array(initial_graph.get_adjacency(attribute=None).data)
     Mbar = np.array(tech_graph.get_adjacency(attribute=None).data)
     Wbar = np.array(tech_graph.get_adjacency(attribute="weight", default=0).data)
     W0 = M0 * Wbar
-    c = g0.ecount() / g0.vcount()
+    c = initial_graph.ecount() / initial_graph.vcount()
     #supplier_id_list = np.fromfile(subfolder+'/'+'supplier_id_list', sep=',')
     #alternate_supplier_id_list = np.fromfile(subfolder+'/'+'alternate_supplier_id_list', sep=',')
     supplier_id_list = np.load(subfolder+'/'+'supplier_id_list'+'.npy')
     alternate_supplier_id_list = np.load(subfolder+'/'+'alternate_supplier_id_list'+'.npy')
-    if g0.vcount() != n:
-        print("Inadequate inputed network: n is", n, "while g0.vcount() is", g0.vcount())
+    if initial_graph.vcount() != n:
+        print(("Inadequate inputed network: n is", n, "while g0.vcount() is", initial_graph.vcount()))
     #log
     if show_time:
-        ntw_creation = datetime.datetime.now() - starting_time
-        ntw_creation_time = datetime.datetime.now()
-        print("Network loaded", ntw_creation)
+        ntw_creation = datetime.now() - starting_time
+        ntw_creation_time = datetime.now()
+        print(("Network loaded", ntw_creation))
 ## Option 2: Generate new graphs
 else:
-    exec(open('generateNetwork.py').read())
+    initial_graph = initialize_graph(n, topology)
+    supplier_id_list, nb_suppliers = identify_suppliers(initial_graph)
+    tech_graph, alternate_supplier_id_list = create_technology_graph(initial_graph, a, b, sigma_w, nb_suppliers, nb_extra_suppliers, supplier_id_list)
+    Wbar = get_tech_matrix(tech_graph)
+    M0, W0, Wbar = get_initial_matrices(initial_graph, tech_graph)
     #log
     if show_time:
-        ntw_creation = datetime.datetime.now() - starting_time
-        ntw_creation_time = datetime.datetime.now()
-        print("Network created", ntw_creation)
-    
-print("a*b: max "+str(max(a*b)))
-print("(1-a)*b*wji: max "+str(((1-a) * b * Wbar).max()))
-#print(M0[0:nb_different, 0:nb_different])
-#print(sum(sum(M0[0:nb_different, 0:nb_different]*np.transpose(M0[0:nb_different, 0:nb_different]))/2))
+        ntw_creation = datetime.now() - starting_time
+        ntw_creation_time = datetime.now()
+        print(("Network created", ntw_creation))
 
+print(("a*b: max "+str(max(a*b))))
+print(("(1-a)*b*wji: max "+str(((1-a) * b * Wbar).max())))
+
+# Export inputed network
+if export_initial_network:
+    subfolder = 'initial_network'
+    initial_graph.save(subfolder + '/' + 'g0' + '.' + format_graph, format=format_graph)
+    tech_graph.save(subfolder+'/'+'tech_graph'+'.'+format_graph, format=format_graph)
+    np.save(subfolder+'/'+'supplier_id_list', supplier_id_list)
+    np.save(subfolder+'/'+'alternate_supplier_id_list', alternate_supplier_id_list)
+    print(("Network data exported in folder:", subfolder))
 
 # Option to shut down one firm
 shot_firm = None
 if randomly_shoot_onefirm:
     #alternate_supplier_id_list
     shot_firm = random.randint(0,n-1)
-    print("The shot firm is", shot_firm)
+    print(("The shot firm is", shot_firm))
     Wbar[:, shot_firm] = 0
     Wbar[shot_firm, :] = 0
     #W0[shot_firm, :] = 0
@@ -93,7 +141,7 @@ if randomly_shoot_onefirm:
 #================================================================================
 # Create specific folder to store outputs
 if export:
-    current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S%f")
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S%f")
     output_folder = current_time + '_' + exp_name + '/'
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
@@ -118,11 +166,11 @@ if export:
     global_param_list.to_csv(output_folder + 'global_param_list.txt', sep = " ", index=False)
     firm_param_list = pd.DataFrame(data = {"a": a, "b": b, "z": z, "nb_suppliers": nb_suppliers, "nb_extra_suppliers": nb_extra_suppliers})
     firm_param_list.to_csv(output_folder + 'firm_param_list.txt', sep = " ", index=False)
-    np.array(g0.get_edgelist()).tofile(output_folder + 'M_0.txt', sep = " ")
+    np.array(initial_graph.get_edgelist()).tofile(output_folder + 'M_0.txt', sep =" ")
     
 # Output tech network
 if export & save_network_on_off:
-    np.array(tech_graph.get_edgelist()).tofile(output_folder + 'Mbar_.txt', sep = " ")
+    # np.array(tech_graph.get_edgelist()).tofile(output_folder + 'Mbar_.txt', sep = " ")
     np.array(igraph.EdgeSeq(tech_graph)["weight"]).tofile(output_folder + 'Wbar_edgelist.txt', sep = " ")
     
     
@@ -142,16 +190,16 @@ if count_nb_unique_ntw:
 #================================================================================
 # Compute initial equilibrium
 W = W0.copy()
-g = g0.copy()
+g = initial_graph.copy()
 #np.savetxt(output_folder+"W0.txt", W0)
 del(W0, M0)
-eq = computeEquilibrium2(a, b, z, W, n, wealth, shot_firm)
+eq = compute_equilibrium2(a, b, z, W, n, wealth, shot_firm)
 #print(eq)
 utility_ts = -np.sum(np.log(eq['P']))
 rewiring_ts = 0
 rewiring_ts_last_round = 0
 #utility_ts[0] = -np.sum(np.log(eq['P']))
-score = computeScore(a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
+score = compute_score(a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
 min_score = score
 
 
@@ -159,9 +207,9 @@ min_score = score
 if export:
     if export_firm_profits:
         line = str(0) + ' ' + str(rewiring_ts) + ' ' + str(utility_ts) + ' ' \
-        + ' '.join(str(eq['X'][i]) for i in range(n)) + ' '\
-        + ' '.join(str(eq['P'][i]) for i in range(n)) + ' '\
-        + ' '.join(str(computeProfit(i, a, b, W, eq['X'], eq['P'], eq['h'])) for i in range(n))+'\n'
+               + ' '.join(str(eq['X'][i]) for i in range(n)) + ' ' \
+               + ' '.join(str(eq['P'][i]) for i in range(n)) + ' ' \
+               + ' '.join(str(compute_profit(i, a, b, W, eq['X'], eq['P'], eq['h'])) for i in range(n)) + '\n'
     else:
         line = str(0) + ' ' + str(rewiring_ts) + ' ' + str(utility_ts) + ' ' + str(score) + "\n"
     file.write(line)
@@ -197,10 +245,10 @@ for r in range(1, NbRound + 1):
     W_last_round = W.copy()
     
     # Update the rewiring order
-    rewiring_order = np.random.choice(range(0,n), replace=False, size=n)
+    rewiring_order = np.random.choice(list(range(0,n)), replace=False, size=n)
     
     # Loop through each firm
-    print("\nRound: "+str(r))
+    print(("\nRound: "+str(r)))
     for i in range(n):
         t += 1
         #if (t%1 == 0):
@@ -215,7 +263,7 @@ for r in range(1, NbRound + 1):
         #print(max(bModif))
         
         # Compute current profit
-        current_profit = computeProfit(id_rewiring_firm, a, b, W, eq['X'], eq['P'], eq['h'])
+        current_profit = compute_profit(id_rewiring_firm, a, b, W, eq['X'], eq['P'], eq['h'])
         potential_profit = current_profit
         #print('t', t, 'candidate firm for rewire', id_rewiring_firm, "score", score, "profit rewiring firm", profit)
     
@@ -249,7 +297,7 @@ for r in range(1, NbRound + 1):
                 # If firms are myopic, they anticipate their new profit based on the current equilibrium
                 # they do not take into account the impact of their rewiring on the system
                 if myopic and (tier < 0):
-                    estimated_new_profit = computeProfit(id_rewiring_firm, a, b, W, eq['X'], eq['P'], eq['h'])
+                    estimated_new_profit = compute_profit(id_rewiring_firm, a, b, W, eq['X'], eq['P'], eq['h'])
                     # new_eq = computeEquilibrium2(a, b, z, W, n, wealth, shot_firm)
                     # new_profit = computeProfit(id_rewiring_firm, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
                     # print("estimated_new_profit:", estimated_new_profit)
@@ -261,7 +309,7 @@ for r in range(1, NbRound + 1):
                     # need to update g igraph object so that we can apply the neighboorhood function
                     g.delete_edges([(id_replaced_supplier, id_rewiring_firm)])
                     g.add_edge(id_visited_supplier, id_rewiring_firm)
-                    firms_within_tiers = identifyFirmsWithinTier(id_rewiring_firm, g, tier)
+                    firms_within_tiers = identify_firms_within_tier(id_rewiring_firm, g, tier)
                     # print("firms_within_tiers:", firms_within_tiers)
                     # print(
                     #     'id_rewiring_firm:', id_rewiring_firm,
@@ -270,7 +318,7 @@ for r in range(1, NbRound + 1):
                     # )
                     g.delete_edges([(id_visited_supplier, id_rewiring_firm)])
                     g.add_edge(id_replaced_supplier, id_rewiring_firm)
-                    partial_eq, estimated_new_profit = computePartialEquilibriumAndProfit(a, b, z, W, n, wealth, eq, W_last_ts, firms_within_tiers, id_rewiring_firm, shot_firm)
+                    partial_eq, estimated_new_profit = compute_partial_equilibrium_and_profit(a, b, z, W, n, wealth, eq, W_last_ts, firms_within_tiers, id_rewiring_firm, shot_firm)
                     
                     #print(id_rewiring_firm, firms_within_tiers, partial_eq, estimated_new_profit,
                     #computeProfit(id_rewiring_firm, a, b, W, eq['X'], eq['P'], eq['h'])
@@ -283,15 +331,15 @@ for r in range(1, NbRound + 1):
                 # otherwise firms have a perfect anticipation
                 # they evaluate their new profit based on the new equilibrium induced by rewiring
                 else:
-                    new_eq = computeEquilibrium2(a, b, z, W, n, wealth, shot_firm)
-                    estimated_new_profit = computeProfit(id_rewiring_firm, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
+                    new_eq = compute_equilibrium2(a, b, z, W, n, wealth, shot_firm)
+                    estimated_new_profit = compute_profit(id_rewiring_firm, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
                     #profit_dic[id_visited_supplier][id_replaced_supplier] = new_profit
                 
                 # if the new profit is larger, then we save this switch
                 if estimated_new_profit > potential_profit + epsilon:
                     potential_profit = estimated_new_profit
                     if myopic: # if myopic, the realized full equilibrium is computed after rewiring is done
-                        new_eq = computeEquilibrium2(a, b, z, W, n, wealth, shot_firm)
+                        new_eq = compute_equilibrium2(a, b, z, W, n, wealth, shot_firm)
                         #if tier > 0:
                             #print('partial h:', partial_eq['h'], 'new h:', new_eq['h'])
                             #print('partial P:', partial_eq['P'], 'new P:', new_eq['P'][partial_eq['firms_within_tiers']])
@@ -326,11 +374,11 @@ for r in range(1, NbRound + 1):
         # After testing all combinations, if there was profit to gain (rewiring == 1
         # we implement the latest switch, we corresponds to the maximal increase in profit
         if rewiring == 1: #si jamais c'est bon, on remplace pour de bon
-            print(
+            print((
                 "Firm "+str(id_rewiring_firm),
                 "changed supplier "+str(id_supplier_toremove)+" to supplier "+str(id_supplier_toadd),
                 "profit increase is "+str(potential_profit - current_profit)
-            )
+            ))
             g.delete_edges([(id_supplier_toremove, id_rewiring_firm)])
             g.add_edge(id_supplier_toadd, id_rewiring_firm)
             W[id_supplier_toadd, id_rewiring_firm] = Wbar[id_supplier_toadd, id_rewiring_firm]
@@ -340,7 +388,7 @@ for r in range(1, NbRound + 1):
             alternate_supplier_id_list[id_rewiring_firm].remove(id_supplier_toadd)
             alternate_supplier_id_list[id_rewiring_firm].append(id_supplier_toremove)
             #if print_score:
-            score = computeScore(a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
+            score = compute_score(a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
             if score < min_score:
                 min_score = score
                     #print("min_score:", min_score)
@@ -387,9 +435,9 @@ for r in range(1, NbRound + 1):
         if export:
             if export_firm_profits:
                 line = str(t) + ' ' + str(rewiring_ts) + ' ' + str(utility_ts) + ' ' \
-                    + ' '.join(str(eq['X'][i]) for i in range(n)) + ' '\
-                    + ' '.join(str(eq['P'][i]) for i in range(n)) + ' '\
-        + ' '.join(str(computeProfit(i, a, b, W, eq['X'], eq['P'], eq['h'])) for i in range(n))+'\n'
+                       + ' '.join(str(eq['X'][i]) for i in range(n)) + ' ' \
+                       + ' '.join(str(eq['P'][i]) for i in range(n)) + ' ' \
+                       + ' '.join(str(compute_profit(i, a, b, W, eq['X'], eq['P'], eq['h'])) for i in range(n)) + '\n'
             else:
                 line = str(t) + ' ' + str(rewiring_ts) + ' ' + str(utility_ts) + ' ' + str(score) + "\n"
             file.write(line)
@@ -408,12 +456,12 @@ for r in range(1, NbRound + 1):
     if apply_stop_condition:
         if rewiring_ts == rewiring_ts_last_round:
             eq_reached = 1
-            print("Network equilibrium reached after", r-1, "turns and", rewiring_ts, "rewirings.")
+            print(("Network equilibrium reached after", r-1, "turns and", rewiring_ts, "rewirings."))
             break
         if np.all(W == W_last_2_round) & np.all(W_last_round == W_last_3_round) \
            & np.all(W_last_2_round == W_last_4_round) & np.all(W_last_3_round == W_last_5_round):
             eq_reached = 2
-            print("Limit cycle of period 2 reached after", r-1, "turns and", rewiring_ts, "rewirings.")
+            print(("Limit cycle of period 2 reached after", r-1, "turns and", rewiring_ts, "rewirings."))
             break
         #if np.all(W == W_last_3_round):
         #    eq_reached = 3
@@ -425,18 +473,18 @@ if (t == NbRound*n):
     print("Network equilibrium not reached")
 
 
-total_time = (datetime.datetime.now() - starting_time).total_seconds()
+total_time = (datetime.now() - starting_time).total_seconds()
 
 #print(W[shot_firm,:])
 #print(W[:,shot_firm])
 
 if show_time:
-    print("ntw_creation", ntw_creation)
-    print("initialization_time", initialization_time)
-    print("loop_phase1", loop_phase1)
-    print("loop_phase2", loop_phase2)
-    print("loop_phase3", loop_phase3)
-    print("total_time", total_time)
+    print(("ntw_creation", ntw_creation))
+    print(("initialization_time", initialization_time))
+    print(("loop_phase1", loop_phase1))
+    print(("loop_phase2", loop_phase2))
+    print(("loop_phase3", loop_phase3))
+    print(("total_time", total_time))
 
 #if export:
     #utility_ts.tofile(output_folder + "utility_ts.txt", sep = " ")
@@ -448,7 +496,7 @@ if export_final_network:
     tech_graph.save(subfolder+'/'+'tech_graph'+'.'+format_graph, format=format_graph)
     np.save(subfolder+'/'+'supplier_id_list', supplier_id_list)
     np.save(subfolder+'/'+'alternate_supplier_id_list', alternate_supplier_id_list)
-    print("Final network data exported in folder:", subfolder)
+    print(("Final network data exported in folder:", subfolder))
     
 if export:
     file.close()
@@ -505,7 +553,7 @@ if export_initntw_experiment:
         myfile.write(str(n)+' '+str(c)+' '+str(cc)+' '+str(sigma_w)+' '+topology+' '+str(eq_reached)+' '+str(r)+' '+str(total_time)+' '+str(current_time)+"\n")
     np.array(g.get_edgelist()).tofile('tmp/Mf_'+current_time+'.txt', sep = " ")
     if inputed_network == False: #if it is a new initial network save the initial network
-        np.array(g0.get_edgelist()).tofile('tmp/M0_'+current_time+'.txt', sep = " ")
+        np.array(initial_graph.get_edgelist()).tofile('tmp/M0_' + current_time + '.txt', sep =" ")
 
 
 if simple_export_with_giniNbNet:
@@ -535,49 +583,43 @@ if simple_export_with_gini:
             + str(total_time) + ' ' + str(min_score) + ' ' \
             + str(gini) + ' ' + "\n"
         )
-        
-del(g, tech_graph, W, Mbar, Wbar, nb_suppliers, supplier_id_list, alternate_supplier_id_list, nb_extra_suppliers)
-del(total_time, rewiring_ts, utility_ts)
-del(a,b,z,wealth)
 
 
 if save_network_on_off and compute_distance_matrix:
     import re
     
-    def edgevectorFromFile(filename):
+    def edgevector_from_file(filename):
         with open(filename, 'r') as file:
             edgevector =  file.read()
         edgevector = str(edgevector).split(' ')
         return [edgevector[i]+' '+edgevector[i+1] for i in range(len(edgevector)) if i % 2 == 0]
         
         
-    def getAllEdgevectors(folder):
+    def get_all_edgevectors(folder):
         all_M_filenames = os.listdir(folder)#, pattern = "M_[0-9*]", full.names = T)
-        all_M_filenames = [item for item in all_M_filenames if re.match("M_(\d*).txt", str(item))]
-        all_M_filenames = {int(re.match("M_(\d*).txt", str(item)).group(1)): item for item in all_M_filenames}
-        edgevectors = {ts: edgevectorFromFile(os.path.join(folder, filename)) for ts, filename in all_M_filenames.items()}
+        all_M_filenames = [item for item in all_M_filenames if re.match(r"M_(\d*).txt", str(item))]
+        all_M_filenames = {int(re.match(r"M_(\d*).txt", str(item)).group(1)): item for item in all_M_filenames}
+        edgevectors = {ts: edgevector_from_file(os.path.join(folder, filename)) for ts, filename in list(all_M_filenames.items())}
         return edgevectors
     
-    def computeUnscaledDistance(edgevector1, edgevector2):
+    def compute_unscaled_distance(edgevector1, edgevector2):
         return len(set(edgevector1) - set(edgevector2)) + len(set(edgevector2) - set(edgevector1))
     
-    def computeDistanceMatrix(folder):
-        edgevectors = getAllEdgevectors(folder)
+    def compute_distance_matrix(folder):
+        edgevectors = get_all_edgevectors(folder)
         nb_networks = len(edgevectors)
-        print("Computing distance between", nb_networks, "networks.")
+        print(("Computing distance between", nb_networks, "networks."))
         res = np.zeros((nb_networks, nb_networks), dtype=int)
         for i in range(nb_networks):
             for j in range(i+1, nb_networks):
-                res[i,j] = computeUnscaledDistance(edgevectors.values()[i], edgevectors.values()[j])
-        res = pd.DataFrame(res, index=edgevectors.keys(), columns=edgevectors.keys())
+                res[i,j] = compute_unscaled_distance(list(edgevectors.values())[i], list(edgevectors.values())[j])
+        res = pd.DataFrame(res, index=list(edgevectors.keys()), columns=list(edgevectors.keys()))
         return res
         
-    res = computeDistanceMatrix(output_folder)
+    res = compute_distance_matrix(output_folder)
     res.to_csv(os.path.join(output_folder, "distanceMatrix.csv"))
     
     os.system('cd '+output_folder+'; rm M*.txt;')
     
 if simple_export_with_giniNbNet:
     os.system('cd '+output_folder+'; rm M*.txt;')
-
-
