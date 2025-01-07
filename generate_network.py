@@ -23,11 +23,11 @@ def initialize_graph_er(n: int, c: int):
     return igraph.Graph.Erdos_Renyi(n=n, m=n*(c-1), loops=False, directed=True)
 
 
-def initialize_graph(n: int, topology: str):
+def initialize_graph(n: int, c: int, topology: str):
     if topology == "SF-FA":
-        return add_one_supplier_each_firm(initialize_graph_sffa(n, 4))
+        return add_one_supplier_each_firm(initialize_graph_sffa(n, c))
     elif topology == "ER":
-        return add_one_supplier_each_firm(initialize_graph_er(n, 4))
+        return add_one_supplier_each_firm(initialize_graph_er(n, c))
     else:
         raise ValueError()
 

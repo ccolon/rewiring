@@ -1,5 +1,14 @@
 import numpy as np
 
+from parameters import EPSILON
+
+
+def get_equilibrium(a, b, z, W, n, wealth, shot_firm, competitive_eq):
+    if competitive_eq == "markup":
+        return compute_equilibrium_markup(a, b, z, W, n, shot_firm)
+    else:
+        return compute_equilibrium2(a, b, z, W, n, wealth, shot_firm)
+
 
 def compute_equilibrium(a, b, z, W, n, wealth, shot_firm=None):
     #start = time.clock()
@@ -103,7 +112,242 @@ def compute_equilibrium2(a, b, z, W, n, wealth, shot_firm=None): # with solve in
     return {"X":X.flatten(), "P":P.flatten(), "h": h}
 
 
-def compute_partial_equilibrium_and_profit(a, b, z, W, n, wealth, eq, W_tm1, firms_within_tiers, id_rewiring_firm, shot_firm):
+def get_alpha(a, W):
+    return a + (1 - a) * np.sum(W, axis=0)
+
+
+def compute_cost_gap(a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm, competite_eq):
+    '''Compute a network-level metric. It is the mean of all so-called firm-level penalty.
+    A firm's penalty is the difference between the maximum profit reachable with perfect anticipation and the current profit
+    '''
+    all_indiv_score = [
+        evalute_cost_penalty(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list,
+                             shot_firm, competite_eq) for firm_id in range(n)]
+    return np.mean(all_indiv_score)
+
+
+
+def compute_equilibrium_markup(a, b, z, W, n, shot_firm=None):  # with solve instead of inv
+    alpha = get_alpha(a, W)
+    # Get V by solving the eigenvector pb
+    M = (1 / alpha) * ((a / n) + (1 - a)[np.newaxis, :] * W)
+    eigenvalues, eigenvectors = np.linalg.eig(M)
+    # Since eigenvalues can have some floating-point errors, we check if the eigenvalue is close to 1
+    index = np.isclose(eigenvalues, 1)
+    # Extract the corresponding eigenvectors
+    eigenvectors_1 = eigenvectors[:, index]
+    ## Normalize the eigenvector (optional, depending on your application)
+    # eigenvector_1 = eigenvectors_1 / np.linalg.norm(eigenvectors_1)
+    v_unnormalized = np.transpose(eigenvectors_1)
+    # check no imaginary part
+    if np.sum(np.imag(v_unnormalized)) > EPSILON:
+        print("IMAGINARY PART")
+    v_unnormalized = np.real(v_unnormalized)
+    # check all same sign
+    if (v_unnormalized > 0).any() and (v_unnormalized < 0).any():
+        raise ValueError("AT LEAST ONE NEGATIVE")
+
+    v_unnormalized = abs(v_unnormalized).flatten()
+
+    kappa = n / np.sum(v_unnormalized * a / alpha)
+    v = kappa * v_unnormalized
+
+    # Get p, by passing prod function to the log and solve Ap = b
+    b_vector = (-np.log(z) + b * alpha * np.log(alpha) + (1 - b * alpha) * np.log(v))[:, np.newaxis]
+    A_matrix = np.eye(n) - (b * (1 - a))[:, np.newaxis] * W
+
+    # n = len(alpha)
+    # A_matrix = np.zeros((n, n))
+    # b_vector = np.zeros(n)
+    # for i in range(n):
+    #    b_vector[i] = -np.log(z[i]) + b[i] * alpha[i] * np.log(alpha[i]) + (1 - b[i] * alpha[i]) * np.log(v[i])
+    #    for j in range(n):
+    #        A_matrix[i, j] = -b[i] * (1 - a[i]) * W[j, i]
+    # print(b_vector - b_vector_1)
+    # print(A_matrix - A_matrix_1)
+    # Solve the linear system A * log_p = b
+    # pd.DataFrame(A_matrix).to_csv('A_matrix.csv', index=False)
+    # pd.DataFrame(W).to_csv('W.csv', index=False)
+    log_p = np.linalg.solve(A_matrix, b_vector)
+    p = np.exp(log_p)
+
+    # Get x
+    v = v.flatten()
+    p = p.flatten()
+    x = v / p
+
+    check = False
+    if check:
+        l = v * a / alpha
+        # G = np.transpose(v * (1 - a) / alpha * W.T / np.transpose(p))
+        G = v * (1 - a) * W / alpha / p[:, np.newaxis]
+        L = np.sum(l)
+        B = L
+        print("Quantity of labor", L, "Budget", B)
+        final_demand = B / (n * p)
+        intermediary_demand = np.sum(G, axis=1)
+        supply = x
+        print("supply", supply)
+        print("total demand", intermediary_demand + final_demand)
+        print("intermediary_demand", intermediary_demand)
+        print("final_demand", final_demand)
+        print("dif", supply - (intermediary_demand + final_demand) > 1e-10)
+
+    return {"X": x.flatten(), "P": p.flatten(), "h": 1}
+
+
+def compute_partial_equilibrium_markup_and_profit(a, b, z, W, n, eq, firms_within_tiers, id_rewiring_firm, shot_firm):
+    '''Compute equilibrium for selected firms only'''
+    # Reduce the system
+    W_reduced = W[np.ix_(firms_within_tiers, firms_within_tiers)]
+    a_reduced = a[firms_within_tiers]
+    b_reduced = b[firms_within_tiers]
+    z_reduced = z[firms_within_tiers]
+    n_reduced = len(firms_within_tiers)
+    alpha = get_alpha(a, W)
+    alpha_reduced = alpha[firms_within_tiers]
+    firms_notin_tiers = list(set(range(n)) - set(firms_within_tiers))
+
+    if len(firms_within_tiers) == n:
+        partial_eq = compute_equilibrium_markup(a_reduced, b_reduced, z_reduced, W_reduced, n_reduced)
+
+    else:
+        # Solve market clearing
+        # M_reduced = (1 / alpha_reduced) * ((a_reduced / n) + (1 - a_reduced)[np.newaxis, :] * W_reduced)
+        # Omega1 = (1 / alpha[firms_within_tiers]) * np.sum(((a[firms_notin_tiers] / n) + (1 - a[firms_notin_tiers])[np.newaxis, :] * W[np.ix_(firms_within_tiers, firms_notin_tiers)]), axis=1)
+        M_reduced = ((1 - a_reduced) / alpha_reduced)[np.newaxis, :] * W_reduced
+        V_eq = eq['X'] * eq['P']
+        Omega1 = 1 + np.sum(
+            (V_eq[firms_notin_tiers] * (1 - a[firms_notin_tiers]) / alpha[firms_notin_tiers])[np.newaxis, :] * W[
+                np.ix_(firms_within_tiers, firms_notin_tiers)], axis=1)
+        V_reduced = np.linalg.solve(np.eye(len(firms_within_tiers)) - M_reduced, Omega1)
+
+        # print('estimated V: '+str(V_reduced[firms_within_tiers.index(id_rewiring_firm)]))
+        # print('current V: '+str(V_eq[id_rewiring_firm]))
+        # print('final demand: '+str(np.sum(V_eq * a / alpha) / n))
+        # print('other demand: ', np.sum( ((1 - a) / alpha)[np.newaxis, :] * W, axis=1)[id_rewiring_firm])
+        # print(np.sum(V_eq * (1 - a) * W / alpha / eq['P'][:, np.newaxis], axis=1)[id_rewiring_firm])
+        id_rewiring_firm_reduced = firms_within_tiers.index(id_rewiring_firm)
+        # print(V_reduced[id_rewiring_firm_reduced])
+        # print(Omega1)
+        # exit()
+        # Solve optimal production
+        b_vector_reduced = (-np.log(z_reduced) + b_reduced * alpha_reduced * np.log(alpha_reduced) + (
+                    1 - b_reduced * alpha_reduced) * np.log(V_reduced))[:, np.newaxis]
+        Omega2 = np.sum(b_reduced * (1 - a_reduced) * W[np.ix_(firms_notin_tiers, firms_within_tiers)] * np.log(
+            eq['P'][firms_notin_tiers][:, np.newaxis]), axis=0)[:, np.newaxis]
+        A_matrix_reduced = np.eye(n_reduced) - (b_reduced * (1 - a_reduced))[:, np.newaxis] * W_reduced
+        log_P_reduced = np.linalg.solve(A_matrix_reduced, b_vector_reduced + Omega2)
+        P_reduced = np.exp(log_P_reduced)
+
+        X_reduced = V_reduced / P_reduced
+
+        # Build Partial Eq
+        P_reduced = P_reduced.flatten()
+        X_reduced = X_reduced.flatten()
+        partial_eq = {
+            "X": X_reduced,
+            "P": P_reduced,
+            'firms_within_tiers': firms_within_tiers
+        }
+
+    # alpha_rewiring_firm = a[id_rewiring_firm] + (1 - a[id_rewiring_firm]) * np.sum(W[:, id_rewiring_firm])
+    # computeCostMarkup(id_rewiring_firm, partial_eq, firms_within_tiers, eq, W, a, alpha_rewiring_firm)
+    estimated_new_cost = partial_eq['P'][firms_within_tiers.index(id_rewiring_firm)]
+
+    return partial_eq, estimated_new_cost
+
+
+
+def compute_cost(firm_id, a, b, W, X, P, h):
+    labor_need = a[firm_id] * b[firm_id] * P[firm_id] * X[firm_id] / h
+    good_needs = (1 - a[firm_id]) * b[firm_id] * P[firm_id] * X[firm_id] * np.transpose(W[:,firm_id]) / P
+    cost = h * labor_need + np.sum(P * good_needs)
+    return cost
+
+
+
+def evaluate_best_alternative_cost(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm, competite_eq):
+    """Compute the best profit reachable by a switch
+    Nonmyopic version: the firm update the W based on the switch and compute the new network-wide equilibrium
+    """
+    min_cost = 9999
+    for id_visited_supplier in alternate_supplier_id_list[firm_id]:
+        W[id_visited_supplier, firm_id] = Wbar[id_visited_supplier, firm_id]
+        for id_replaced_supplier in supplier_id_list[firm_id]:
+            #print('test', firm_id, id_replaced_supplier, id_visited_supplier)
+            W[id_replaced_supplier, firm_id] = 0 # on enleve ce lien dans le W
+            new_eq = get_equilibrium(a, b, z, W, n, wealth, shot_firm, competite_eq)
+            new_cost = compute_cost(firm_id, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
+            if new_cost < min_cost:
+                min_cost = new_cost
+            W[id_replaced_supplier, firm_id] = Wbar[id_replaced_supplier, firm_id] #apres le test d'un supplier, on remet le lien dans W
+        W[id_visited_supplier, firm_id] = 0 # a la fin du test, on remet W comme avant
+    return min_cost
+
+
+def evalute_cost_penalty(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm,
+                         competite_eq):
+    """Compute the difference between the current profit and the max profit reachable by a switch
+    """
+    eq = get_equilibrium(a, b, z, W, n, wealth, shot_firm, competite_eq)
+    current_cost = compute_cost(firm_id, a, b, W, eq['X'], eq['P'], eq['h'])
+    min_alternative_cost = evaluate_best_alternative_cost(firm_id, a, b, z, W, n, wealth, Wbar, supplier_id_list,
+                                                          alternate_supplier_id_list, shot_firm, competite_eq)
+    dif = current_cost - min_alternative_cost
+    if dif <= 0:
+        # print('Firm '+str(firm_id)+': at the best profit')
+        return 0
+    else:
+        # print('Firm '+str(firm_id)+': not at the best profit')
+        return abs(dif)
+
+
+def get_partial_eq_and_profit(a, b, z, W, n, wealth, eq, W_tm1, firms_within_tiers, id_rewiring_firm, shot_firm,
+                              competitive_eq):
+    if competitive_eq == "markup":
+        return compute_partial_equilibrium_markup_and_profit(a, b, z, W, n, eq, firms_within_tiers, id_rewiring_firm,
+                                                        shot_firm)
+    else:
+        return compute_partial_equilibrium_and_profit(a, b, z, W, n, wealth, eq, W_tm1, firms_within_tiers,
+                                                  id_rewiring_firm, shot_firm)
+
+
+def compute_partial_equilibrium_and_profit(a, b, z, W, n, wealth, eq, firms_within_tiers, id_rewiring_firm,
+                                            shot_firm):
+    '''Compute equilibrium for selected firms only
+    Suppose that the firm doing this calculation knows:
+    - prices, production, wage from last time step
+    - all parameters of firms_within_tiers
+    - the amount of work hired and intermediary demand from last time step of firms_within_tiers
+    - the matrix W within firms_within_tiers
+    '''
+    # reduce the system
+    # print(firms_within_tiers)
+    W_reduced = W[np.ix_(firms_within_tiers, firms_within_tiers)]
+    a_reduced = a[firms_within_tiers]
+    b_reduced = b[firms_within_tiers]
+    z_reduced = z[firms_within_tiers]
+
+    # First equation: good market balance
+    if shot_firm == None:  # we do not use n_reduced here because:
+        # 1. the id of the shot_firm correspoonds to the non-reduced system
+        # 2. the wealth corresponds to the non-reduced system
+        hh_demand = (wealth / n) * np.ones([n, 1])
+    else:
+        hh_demand = (wealth / (n - 1)) * np.ones([n, 1])
+        hh_demand[shot_firm] = 0
+
+    partial_eq = compute_equilibrium_markup(a_reduced, b_reduced, z_reduced, W_reduced, n, shot_firm=None)
+    partial_eq["firms_within_tiers"] = firms_within_tiers
+
+    firm_id_reduced = firms_within_tiers.index(id_rewiring_firm)
+    mean_cost = eq['P'][firm_id_reduced]
+
+    return partial_eq, mean_cost
+
+
+def compute_partial_equilibrium_and_profit2(a, b, z, W, n, wealth, eq, W_tm1, firms_within_tiers, id_rewiring_firm, shot_firm):
     '''Compute equilibrium for selected firms only
     Suppose that the firm doing this calculation knows:
     - prices, production, wage from last time step
@@ -195,8 +439,7 @@ def compute_partial_equilibrium_and_profit(a, b, z, W, n, wealth, eq, W_tm1, fir
     print(("old X:", eq['X'][firms_within_tiers], "new X:", X_reduced))
 
     # try to implement as in text. We don't do "input_factor_last_timestep_from_reduced". We know the last prices of the suppliers...
-    exit()
-    
+
     # Build Partial Eq
     P_reduced = P_reduced.flatten()
     X_reduced = X_reduced.flatten()
@@ -334,7 +577,29 @@ def draw_random_vector_normal(mean, sd, n, min_val=None, max_val=None):
     return vec
 
 
+def draw_random_vector_lognormal(mean, sd, n, min_val=None, max_val=None, integer=False):
+    if mean == 0:
+        return [0 for x in range(n)]
+
+    else:
+        mean_lognorm = np.log(mean ** 2 / (mean ** 2 + sd ** 2) ** (1 / 2))
+        sd_lognorm = (np.log(1 + sd ** 2 / mean ** 2)) ** (1 / 2)
+        vec = np.random.lognormal(mean_lognorm, sd_lognorm, n)
+        if min_val or max_val:
+            for k in range(len(vec)):
+                if min_val:
+                    if vec[k] < min_val:
+                        vec[k] = min_val
+                if max_val:
+                    if vec[k] > max_val:
+                        vec[k] = max_val
+        if integer:
+            vec = [int(round(x)) for x in list(vec)]
+        return vec
+
+
 def identify_firms_within_tier(id_firm, g, tier):
     neighboors = g.neighborhood(vertices=id_firm, order=tier, mode='all')
     neighboors.sort()
     return neighboors
+
