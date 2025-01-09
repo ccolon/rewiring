@@ -4,19 +4,21 @@ from datetime import datetime
 exp_name = "test"
 
 # Model parameter
-nb_rounds = 20
-nb_firms = 30
+nb_rounds = 50
+nb_firms = 50
 c = 4
-cc = 2
-myopic = True
-mean_tier = 3.8
-sigma_tier = 1
-sigma_z = 0.0
-sigma_a = 0.0
-sigma_b = 0.0
-sigma_w = 0.0
-inputed_network = False
+cc = 4
+myopic = False
+mean_tier = 1
+sigma_tier = 0
+sigma_z = 0
+sigma_a = 0
+sigma_b = 0
+sigma_w = 0
+inputed_network = True
 topology = "SF-FA"
+randomly_shoot_one_firm = True
+
 
 
 
@@ -27,15 +29,14 @@ simple_export_suffix = '_' + datetime.now().strftime("%Y%m%d")
 # Model option - set default parameters
 EPSILON = 1e-10
 novelty_suffix = '_NEWNET'
-randomly_shoot_onefirm = False
-save_networks = False
+save_networks = True
 simple_export = False
 firm_level_export = False
-export = False
+export = True
 export_prices_productions = True
 export_initntw_experiment = False
 export_initial_network = False
-export_final_network = False
+export_final_network = True
 export_who_rewires = True
 compute_distance_matrix = False
 apply_stop_condition = True
@@ -44,7 +45,6 @@ hamiltonian = False
 print_score = True
 get_score = False
 tier = 0  # up to which tier should a firm have full knowledge. Valid if myopic. If tier high enough, should be the same as non-myopic
-competitive_eq = "markup"  #"mean_cost", "marginal_cost", "markup"
 scores_window = 5
 
 # up to which tier should a firm have full knowledge. Valid if myopic. If tier high enough, should be the same as non-myopic
@@ -52,25 +52,25 @@ scores_window = 5
 exp_type = "normal"
 
 if exp_type == "shootInit":
-    randomly_shoot_onefirm = False
+    randomly_shoot_one_firm = False
     save_network_on_off = True
     export_final_network = True
     export = True
 
 if exp_type == "shootOneSaveFinal":
-    randomly_shoot_onefirm = True
+    randomly_shoot_one_firm = True
     save_network_on_off = True
     export_final_network = True
     export = True
 
 if exp_type == "recover":
-    randomly_shoot_onefirm = False
+    randomly_shoot_one_firm = False
     save_network_on_off = True
     export_final_network = True
     export = True
 
 if exp_type == "shootOneRestart":
-    randomly_shoot_onefirm = True
+    randomly_shoot_one_firm = True
     save_network_on_off = True
     export_initial_network = True
     export_final_network = False
