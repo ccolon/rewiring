@@ -270,8 +270,7 @@ for r in range(1, nb_rounds + 1):
                     firms_within_tiers = identify_firms_within_tier(id_rewiring_firm, g, tier[id_rewiring_firm])
                     g.delete_edges([(id_visited_supplier, id_rewiring_firm)])
                     g.add_edge(id_replaced_supplier, id_rewiring_firm)
-                    partial_eq, estimated_new_cost = compute_partial_equilibrium_and_cost(a, b, z, W, nb_firms,
-                                                                                          eq,
+                    partial_eq, estimated_new_cost = compute_partial_equilibrium_and_cost(a, b, z, W,
                                                                                           firms_within_tiers,
                                                                                           id_rewiring_firm,
                                                                                           shot_firm)
