@@ -1,7 +1,8 @@
 # Script parameter
 from datetime import datetime
 
-exp_name = "test"
+exp_name = "slowing"
+exp_type = "slowing"
 
 # Model parameter
 nb_rounds = 50
@@ -15,9 +16,9 @@ sigma_z = 0
 sigma_a = 0
 sigma_b = 0
 sigma_w = 0
-inputed_network = True
+inputed_network = False
 topology = "SF-FA"
-randomly_shoot_one_firm = True
+randomly_shoot_one_firm = False
 
 
 
@@ -32,7 +33,7 @@ novelty_suffix = '_NEWNET'
 save_networks = True
 simple_export = False
 firm_level_export = False
-export = True
+export = False
 export_prices_productions = True
 export_initntw_experiment = False
 export_initial_network = False
@@ -49,7 +50,6 @@ scores_window = 5
 
 # up to which tier should a firm have full knowledge. Valid if myopic. If tier high enough, should be the same as non-myopic
 
-exp_type = "normal"
 
 if exp_type == "shootInit":
     randomly_shoot_one_firm = False

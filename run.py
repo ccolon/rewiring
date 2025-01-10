@@ -18,6 +18,7 @@ from parameters import *
 
 # Model parameters
 if len(sys.argv) > 1:
+    print('ok')
     sigma_w = float(sys.argv[5])
     sigma_z = float(sys.argv[6])
     sigma_b = float(sys.argv[7])
@@ -34,7 +35,7 @@ if len(sys.argv) > 1:
 
     # Do runs
     nb_rounds = int(sys.argv[2])
-    n = int(sys.argv[3])
+    nb_firms = int(sys.argv[3])
     c = 4
     cc = int(sys.argv[4])
 
@@ -46,7 +47,6 @@ starting_time = datetime.now()
 
 #================================================================================
 # Parameters that need n
-wealth = nb_firms
 nb_extra_suppliers = np.full(nb_firms, cc)
 
 if inputed_network:
@@ -176,7 +176,6 @@ if count_nb_unique_ntw:
 #utility_ts = np.empty(1 + Tfinal) # from 0 to Tfinal
 #rewiring_time = []
 
-
 #================================================================================
 # Compute initial equilibrium
 W = W0.copy()
@@ -290,7 +289,7 @@ for r in range(1, nb_rounds + 1):
                     id_supplier_toremove = id_replaced_supplier
                     id_supplier_toadd = id_visited_supplier
 
-                # Apres le test d'un supplier à remplacer, on remet le lien dans W
+                # Apres le test d'un supplier a remplacer, on remet le lien dans W
                 W[id_replaced_supplier, id_rewiring_firm] = Wbar[id_replaced_supplier, id_rewiring_firm]
 
                 # Apres le test du nouveau supplier, on remet le lien dans W
