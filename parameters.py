@@ -2,15 +2,14 @@
 from datetime import datetime
 
 exp_name = "slowing"
-exp_type = "slowing"
 
 # Model parameter
 nb_rounds = 50
-nb_firms = 50
+nb_firms = 300
 c = 4
 cc = 4
 myopic = False
-mean_tier = 1
+mean_tier = 0  # random.choice([1, 2, 3, 4, 5])
 sigma_tier = 0
 sigma_z = 0
 sigma_a = 0
@@ -33,7 +32,7 @@ novelty_suffix = '_NEWNET'
 save_networks = True
 simple_export = False
 firm_level_export = False
-export = False
+export = True
 export_prices_productions = True
 export_initntw_experiment = False
 export_initial_network = False
@@ -50,6 +49,7 @@ scores_window = 5
 
 # up to which tier should a firm have full knowledge. Valid if myopic. If tier high enough, should be the same as non-myopic
 
+exp_type = "normal"
 
 if exp_type == "shootInit":
     randomly_shoot_one_firm = False

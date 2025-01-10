@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.sparse.linalg import eigs
 
 from parameters import EPSILON
 
@@ -33,23 +34,29 @@ def compute_equilibrium(a, b, z, W, n, shot_firm=None):  # with solve instead of
         n = n - 1
     alpha = get_alpha(a, W)
     M = (1 / alpha) * (a / n + (1 - a)[np.newaxis, :] * W)
-    eigenvalues, eigenvectors = np.linalg.eig(M)
-    # Since eigenvalues can have some floating-point errors, we check if the eigenvalue is close to 1
-    index = np.isclose(eigenvalues, 1)
-    if ~index.any():
-        raise ValueError('No eigenvalue 1')
-    # Extract the corresponding eigenvectors
-    eigenvectors_1 = eigenvectors[:, index]
-    v_unnormalized = np.transpose(eigenvectors_1)
+    # eigenvalues, eigenvectors = np.linalg.eig(M)
+    eigenvalues, eigenvectors = eigs(M, k=1, which='LM')  # 'LM' for Largest Magnitude
+    eigenvalue = eigenvalues[0].real
+    if abs(1.0 - eigenvalue) > EPSILON:
+        raise ValueError("Eigenvalue is not 1")
+    v_unnormalized = eigenvectors[:, 0].real
+    # # Since eigenvalues can have some floating-point errors, we check if the eigenvalue is close to 1
+    # index = np.isclose(eigenvalues, 1)
+    # if ~index.any():
+    #     raise ValueError('No eigenvalue 1')
+    # # Extract the corresponding eigenvectors
+    # eigenvectors_1 = eigenvectors[:, index]
+    # v_unnormalized = np.transpose(eigenvectors_1)
     # check no imaginary part
     if np.sum(np.imag(v_unnormalized)) > EPSILON:
-        print("IMAGINARY PART")
+        raise ValueError("Imaginary part in the eigenvector")
     v_unnormalized = np.real(v_unnormalized)
     # check all same sign
     if (v_unnormalized > 0).any() and (v_unnormalized < 0).any():
-        raise ValueError("AT LEAST ONE NEGATIVE")
-
+        raise ValueError("Negative sales")
     v_unnormalized = abs(v_unnormalized).flatten()
+    if np.sum(v_unnormalized) < EPSILON:
+        raise ValueError("All sales are null")
 
     kappa = n / np.sum(v_unnormalized * a / alpha)
     v = kappa * v_unnormalized
@@ -111,11 +118,11 @@ def evaluate_best_alternative_cost(firm_id, a, b, z, W, n, Wbar, supplier_id_lis
             #print('test', firm_id, id_replaced_supplier, id_visited_supplier)
             W[id_replaced_supplier, firm_id] = 0 # on enleve ce lien dans le W
             new_eq = compute_equilibrium(a, b, z, W, n, shot_firm)
-            new_cost = compute_cost(firm_id, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
+            new_cost = new_eq['P'][firm_id]  # compute_cost(firm_id, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
             if new_cost < min_cost:
                 min_cost = new_cost
             W[id_replaced_supplier, firm_id] = Wbar[id_replaced_supplier, firm_id] #apres le test d'un supplier, on remet le lien dans W
-        W[id_visited_supplier, firm_id] = 0 # a la fin du test, on remet W comme avant
+        W[id_visited_supplier, firm_id] = 0  # a la fin du test, on remet W comme avant
     return min_cost
 
 
@@ -123,7 +130,7 @@ def evalute_cost_penalty(firm_id, a, b, z, W, n, Wbar, supplier_id_list, alterna
     """Compute the difference between the current profit and the max profit reachable by a switch
     """
     eq = compute_equilibrium(a, b, z, W, n, shot_firm)
-    current_cost = compute_cost(firm_id, a, b, W, eq['X'], eq['P'], eq['h'])
+    current_cost = eq['P'][firm_id]  # compute_cost(firm_id, a, b, W, eq['X'], eq['P'], eq['h'])
     min_alternative_cost = evaluate_best_alternative_cost(firm_id, a, b, z, W, n, Wbar, supplier_id_list,
                                                           alternate_supplier_id_list, shot_firm)
     dif = current_cost - min_alternative_cost
@@ -132,11 +139,11 @@ def evalute_cost_penalty(firm_id, a, b, z, W, n, Wbar, supplier_id_list, alterna
         return 0
     else:
         # print('Firm '+str(firm_id)+': not at the best profit')
-        return abs(dif)
+        return abs(dif) / current_cost
 
 
 
-def compute_partial_equilibrium_and_cost(a, b, z, W, n, eq, firms_within_tiers, id_rewiring_firm,
+def compute_partial_equilibrium_and_cost(a, b, z, W, firms_within_tiers, id_rewiring_firm,
                                          shot_firm):
     """Compute equilibrium for selected firms only
     Suppose that the firm doing this calculation knows:
@@ -169,7 +176,7 @@ def compute_partial_equilibrium_and_cost(a, b, z, W, n, eq, firms_within_tiers, 
     partial_eq["firms_within_tiers"] = firms_within_tiers
 
     firm_id_reduced = firms_within_tiers.index(id_rewiring_firm)
-    mean_cost = eq['P'][firm_id_reduced]
+    mean_cost = partial_eq['P'][firm_id_reduced]
 
     return partial_eq, mean_cost
 
