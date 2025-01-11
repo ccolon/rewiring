@@ -34,19 +34,20 @@ def compute_equilibrium(a, b, z, W, n, shot_firm=None):  # with solve instead of
         n = n - 1
     alpha = get_alpha(a, W)
     M = (1 / alpha) * (a / n + (1 - a)[np.newaxis, :] * W)
-    # eigenvalues, eigenvectors = np.linalg.eig(M)
-    eigenvalues, eigenvectors = eigs(M, k=1, which='LM')  # 'LM' for Largest Magnitude
-    eigenvalue = eigenvalues[0].real
-    if abs(1.0 - eigenvalue) > EPSILON:
-        raise ValueError("Eigenvalue is not 1")
-    v_unnormalized = eigenvectors[:, 0].real
-    # # Since eigenvalues can have some floating-point errors, we check if the eigenvalue is close to 1
-    # index = np.isclose(eigenvalues, 1)
-    # if ~index.any():
-    #     raise ValueError('No eigenvalue 1')
-    # # Extract the corresponding eigenvectors
-    # eigenvectors_1 = eigenvectors[:, index]
-    # v_unnormalized = np.transpose(eigenvectors_1)
+    if M.shape[0] > 10:
+        eigenvalues, eigenvectors = eigs(M, k=1, which='LM')  # 'LM' for Largest Magnitude
+        eigenvalue = eigenvalues[0].real
+        if abs(1.0 - eigenvalue) > EPSILON:
+            print(M)
+            raise ValueError("Eigenvalue is not 1")
+        v_unnormalized = eigenvectors[:, 0].real
+    else:
+        eigenvalues, eigenvectors = np.linalg.eig(M)
+        index = np.isclose(eigenvalues, 1)
+        if ~index.any():
+            raise ValueError('No eigenvalue 1')
+        eigenvectors_1 = eigenvectors[:, index]
+        v_unnormalized = np.transpose(eigenvectors_1)
     # check no imaginary part
     if np.sum(np.imag(v_unnormalized)) > EPSILON:
         raise ValueError("Imaginary part in the eigenvector")
@@ -153,9 +154,13 @@ def compute_partial_equilibrium_and_cost(a, b, z, W, firms_within_tiers, id_rewi
     - the matrix W within firms_within_tiers
     """
     # reduce the system
-    # print(firms_within_tiers)
-    W_reduced = W[np.ix_(firms_within_tiers, firms_within_tiers)]
+    W_reduced_unnormalized = W[np.ix_(firms_within_tiers, firms_within_tiers)]
+    col_sums = W_reduced_unnormalized.sum(axis=0)
+    nonzero_mask = col_sums != 0.0
+    W_reduced = W_reduced_unnormalized.copy()
+    # W_reduced[:, nonzero_mask] = W_reduced_unnormalized[:, nonzero_mask] / col_sums[nonzero_mask]
     a_reduced = a[firms_within_tiers]
+    # a_reduced[~nonzero_mask] = 1
     b_reduced = b[firms_within_tiers]
     z_reduced = z[firms_within_tiers]
     n_reduced = len(firms_within_tiers)

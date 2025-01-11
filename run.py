@@ -373,6 +373,10 @@ if t == nb_rounds * nb_firms:
     eq_reached = 0
     print("Network equilibrium not reached")
 
+if get_last_score:
+    av_score = compute_cost_gap(a, b, z, W, nb_firms, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
+    min_score = av_score
+
 total_time = (datetime.now() - starting_time).total_seconds()
 print(f"Initial utility: {utility[0]}; final: {utility[-1]}. "
       f"Relative change: {(utility[-1] - utility[0]) / abs(utility[0])}")
@@ -403,7 +407,7 @@ if simple_export:
         nb_firms, c, cc, sigma_w, sigma_z, sigma_b, topology, g.diameter(), np.mean(tier),
         eq_reached, r, rewiring_ts, total_time
     ]
-    if get_score:
+    if get_score or get_last_score:
         to_export += [min_score, av_score]
     to_export = [str(x) for x in to_export]
     simple_export_filename = os.path.join(general_output_folder,
