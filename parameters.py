@@ -1,15 +1,16 @@
 # Script parameter
+import random
 from datetime import datetime
 
-exp_name = "slowing"
+exp_name = "AiSi"
 
 # Model parameter
-nb_rounds = 50
-nb_firms = 300
-c = 4
-cc = 4
+nb_rounds = 30
+nb_firms = 20
+c = 2
+cc = 2
 myopic = False
-mean_tier = 0  # random.choice([1, 2, 3, 4, 5])
+mean_tier = 10  # random.choice([0, 1, 2, 3, 4, 5, 6])
 sigma_tier = 0
 sigma_z = 0
 sigma_a = 0
@@ -18,6 +19,7 @@ sigma_w = 0
 inputed_network = False
 topology = "SF-FA"
 randomly_shoot_one_firm = False
+AiSi_spread = 0.01
 
 
 
@@ -29,27 +31,28 @@ simple_export_suffix = '_' + datetime.now().strftime("%Y%m%d")
 # Model option - set default parameters
 EPSILON = 1e-10
 novelty_suffix = '_NEWNET'
-save_networks = True
+export = False
 simple_export = False
+save_networks = False
 firm_level_export = False
-export = True
-export_prices_productions = True
+export_prices_productions = False
 export_initntw_experiment = False
 export_initial_network = False
-export_final_network = True
+export_final_network = False
 export_who_rewires = True
 compute_distance_matrix = False
 apply_stop_condition = True
 count_nb_unique_ntw = False
 hamiltonian = False
-print_score = True
+print_score = False
 get_score = False
+get_last_score = False
 tier = 0  # up to which tier should a firm have full knowledge. Valid if myopic. If tier high enough, should be the same as non-myopic
 scores_window = 5
 
 # up to which tier should a firm have full knowledge. Valid if myopic. If tier high enough, should be the same as non-myopic
 
-exp_type = "normal"
+exp_type = "initntw"
 
 if exp_type == "shootInit":
     randomly_shoot_one_firm = False
@@ -81,6 +84,7 @@ if exp_type == 'initntw':
     cache_initial_network = True
     cache_firm_parameters = True
     save_network_on_off = False
+    export_initial_network = True
     #export_final_network = True
     mean_tier = mean_tier
     sigma_tier = 0

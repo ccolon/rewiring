@@ -1,6 +1,6 @@
+import copy
 import os
 import pickle
-import random
 import subprocess
 import sys
 
@@ -13,7 +13,7 @@ from export import create_export_folder, initialize_ts_file, initialize_rewiring
 from functions import draw_random_vector_normal, compute_cost_gap, identify_firms_within_tier, \
     draw_random_vector_lognormal, compute_equilibrium, compute_partial_equilibrium_and_cost, calculate_utility
 from generate_network import initialize_graph, create_technology_graph, identify_suppliers, get_tech_matrix, \
-    get_initial_matrices
+    get_initial_matrices, get_AiSi_productivities, compute_adjusted_z
 from parameters import *
 
 # Model parameters
@@ -22,19 +22,23 @@ if len(sys.argv) > 1:
     sigma_z = float(sys.argv[6])
     sigma_b = float(sys.argv[7])
     sigma_a = float(sys.argv[8])
+    AiSi_spread = float(sys.argv[9])
+
     rewiring_test = 'try_all'
 
     # Whether to reuse an existing graph
-    if sys.argv[9] == "inputed":
+    if sys.argv[10] == "inputed":
         inputed_network = True
         novelty_suffix = ""
     else:
         inputed_network = False
         novelty_suffix = '_NEWNET'
 
+    exp_name = sys.argv[11]
+
     # Do runs
     nb_rounds = int(sys.argv[2])
-    n = int(sys.argv[3])
+    nb_firms = int(sys.argv[3])
     c = 4
     cc = int(sys.argv[4])
 
@@ -106,6 +110,7 @@ if inputed_network:
     #alternate_supplier_id_list = np.fromfile(subfolder+'/'+'alternate_supplier_id_list', sep=',')
     supplier_id_list = np.load(os.path.join(subfolder, 'supplier_id_list.npy'), allow_pickle=True)
     alternate_supplier_id_list = np.load(os.path.join(subfolder, 'alternate_supplier_id_list.npy'), allow_pickle=True)
+    AiSi = np.load(os.path.join(subfolder, 'AiSi.npy'), allow_pickle=True)
     if initial_graph.vcount() != nb_firms:
         print(("Inadequate inputed network: n is", nb_firms, "while g0.vcount() is", initial_graph.vcount()))
 
@@ -117,18 +122,21 @@ else:
                                                                      nb_extra_suppliers, supplier_id_list)
     Wbar = get_tech_matrix(tech_graph)
     M0, W0, Wbar = get_initial_matrices(initial_graph, tech_graph)
+    AiSi = get_AiSi_productivities(supplier_id_list, alternate_supplier_id_list, spread=AiSi_spread)
 
 print(("a*b: max " + str(max(a * b))))
 print(("(1-a)*b*wji: max " + str(((1 - a) * b * Wbar).max())))
 
 # Export inputed network
-# if export_initial_network:
-#     subfolder = 'initial_network'
-#     initial_graph.save(subfolder + '/' + 'g0' + '.' + format_graph, format=format_graph)
-#     tech_graph.save(subfolder+'/'+'tech_graph'+'.'+format_graph, format=format_graph)
-#     np.save(subfolder+'/'+'supplier_id_list', supplier_id_list)
-#     np.save(subfolder+'/'+'alternate_supplier_id_list', alternate_supplier_id_list)
-#     print(("Network data exported in folder:", subfolder))
+if export_initial_network:
+    if not inputed_network:
+        subfolder = 'initial_network'
+        initial_graph.save(subfolder + '/' + 'g0' + '.' + format_graph, format=format_graph)
+        tech_graph.save(subfolder+'/'+'tech_graph'+'.'+format_graph, format=format_graph)
+        np.save(subfolder+'/'+'supplier_id_list', supplier_id_list)
+        np.save(subfolder+'/'+'alternate_supplier_id_list', alternate_supplier_id_list)
+        np.save(subfolder+'/'+'AiSi', AiSi)
+        print(("Network data exported in folder:", subfolder))
 
 # Tier
 min_tier = 0
@@ -182,7 +190,8 @@ if count_nb_unique_ntw:
 W = W0.copy()
 g = initial_graph.copy()
 
-eq = compute_equilibrium(a, b, z, W, nb_firms, shot_firm)
+adjusted_z = compute_adjusted_z(z, AiSi, supplier_id_list)
+eq = compute_equilibrium(a, b, adjusted_z, W, nb_firms, shot_firm)
 
 #================================================================================
 # Initialize some variables
@@ -263,6 +272,12 @@ for r in range(1, nb_rounds + 1):
                 W[id_replaced_supplier, id_rewiring_firm] = 0  # on enleve ce lien dans le W
                 # If firms are myopic, they anticipate their new profit based on the current equilibrium
                 # they do not take into account the impact of their rewiring on the system
+                # need to add a tmp_supplier_id_list to get the AiSi
+                tmp_supplier_id_list = copy.deepcopy(supplier_id_list)
+                tmp_supplier_id_list[id_rewiring_firm].remove(id_replaced_supplier)
+                tmp_supplier_id_list[id_rewiring_firm].append(id_visited_supplier)
+                adjusted_z = compute_adjusted_z(z, AiSi, tmp_supplier_id_list)
+
                 if myopic:
                     # need to update g igraph object so that we can apply the neighboorhood function
                     g.delete_edges([(id_replaced_supplier, id_rewiring_firm)])
@@ -270,20 +285,19 @@ for r in range(1, nb_rounds + 1):
                     firms_within_tiers = identify_firms_within_tier(id_rewiring_firm, g, tier[id_rewiring_firm])
                     g.delete_edges([(id_visited_supplier, id_rewiring_firm)])
                     g.add_edge(id_replaced_supplier, id_rewiring_firm)
-                    partial_eq, estimated_new_cost = compute_partial_equilibrium_and_cost(a, b, z, W,
+                    partial_eq, estimated_new_cost = compute_partial_equilibrium_and_cost(a, b, adjusted_z, W,
                                                                                           firms_within_tiers,
                                                                                           id_rewiring_firm,
                                                                                           shot_firm)
                 # otherwise firms have a perfect anticipation
                 else:
-                    new_eq = compute_equilibrium(a, b, z, W, nb_firms, shot_firm)
+                    new_eq = compute_equilibrium(a, b, adjusted_z, W, nb_firms, shot_firm)
                     estimated_new_cost = new_eq['P'][id_rewiring_firm]
 
                 if estimated_new_cost < potential_cost - EPSILON:
                     potential_cost = estimated_new_cost
                     if myopic:  # if myopic, the realized full equilibrium is computed after rewiring is done
-                        new_eq = compute_equilibrium(a, b, z, W, nb_firms, shot_firm)
-
+                        new_eq = compute_equilibrium(a, b, adjusted_z, W, nb_firms, shot_firm)
                     eq = new_eq
                     do_rewiring = True
                     id_supplier_toremove = id_replaced_supplier
@@ -313,7 +327,7 @@ for r in range(1, nb_rounds + 1):
             alternate_supplier_id_list[id_rewiring_firm].remove(id_supplier_toadd)
             alternate_supplier_id_list[id_rewiring_firm].append(id_supplier_toremove)
             if get_score:
-                score = compute_cost_gap(a, b, z, W, n, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
+                score = compute_cost_gap(a, b, adjusted_z, W, n, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
                 # print(score, min_score)
                 if score < min_score:
                     min_score = score
@@ -374,7 +388,8 @@ if t == nb_rounds * nb_firms:
     print("Network equilibrium not reached")
 
 if get_last_score:
-    av_score = compute_cost_gap(a, b, z, W, nb_firms, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
+    adjusted_z = compute_adjusted_z(z, AiSi, supplier_id_list)
+    av_score = compute_cost_gap(a, b, adjusted_z, W, nb_firms, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
     min_score = av_score
 
 total_time = (datetime.now() - starting_time).total_seconds()
@@ -417,11 +432,12 @@ if simple_export:
 
 if export_initntw_experiment:
     simple_export_filename = os.path.join(general_output_folder, "initntw_experiment.txt")
-    current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S%f")
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S%f")
     with open(simple_export_filename, "a") as myfile:
         myfile.write(
-            str(n) + ' ' + str(c) + ' ' + str(cc) + ' '
-            + str(sigma_a) + ' ' + str(sigma_b) + ' ' + str(sigma_z) + ' ' + str(sigma_w) + ' ' + topology + ' '
+            str(nb_firms) + ' ' + str(c) + ' ' + str(cc) + ' '
+            + str(sigma_a) + ' ' + str(sigma_b) + ' ' + str(sigma_z) + ' ' + str(sigma_w) + ' ' + str(AiSi_spread) + " "
+            + topology + ' '
             + str(eq_reached) + ' ' + str(r) + ' ' + str(total_time) + ' ' + str(current_time) + "\n"
         )
     np.array(g.get_edgelist()).tofile(os.path.join(general_output_folder, 'Mf_' + current_time + '.txt'), sep=" ")

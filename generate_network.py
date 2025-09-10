@@ -2,6 +2,7 @@ import random
 
 import igraph
 import numpy as np
+from itertools import combinations
 
 from functions import draw_random_vector_normal
 
@@ -90,6 +91,7 @@ def create_technology_graph(initial_graph, a: float, b: float, sigma_w: float,
         pot_supplier_id_list[i] = tech_graph.neighbors(i, mode="in")
     return tech_graph, alternate_supplier_id_list
 
+
 def add_link_weight(tech_graph, a: float, b: float, sigma_w: float, nb_suppliers: list):
     # create the edge attribute link weight
     eps = 5e-2
@@ -125,8 +127,18 @@ def get_initial_matrices(initial_graph, tech_graph):
     W0 = M0 * Wbar
     return M0, W0, Wbar
 
-# Mbar = np.array(tech_graph.get_adjacency(attribute=None).data)
-#print(Mbar)
 
+def get_AiSi_productivities(supplier_id_list: list, alternate_supplier_id_list: list, spread: float):
+    nb_suppliers_per_firm = [len(s) for s in supplier_id_list]
+    all_potential_suppliers_per_firm = [sorted(supplier_id_list[i] + alternate_supplier_id_list[i])
+                                        for i in range(len(supplier_id_list))]
+    all_combinations_of_suppliers = [list(combinations(all_suppliers, c_i)) for c_i, all_suppliers
+              in zip(nb_suppliers_per_firm, all_potential_suppliers_per_firm)]
+    AiSi = [{combi: random.uniform(1 - spread, 1 + spread) for combi in all_combi}
+            for all_combi in all_combinations_of_suppliers]
+    return AiSi
 
+def compute_adjusted_z(z: np.array, AiSi: list, supplier_id_list: list):
+    current_AiSi = [AiSi_one_firm[tuple(sorted(supplier_id_list[i]))] for i, AiSi_one_firm in enumerate(AiSi)]
+    return z * np.array(current_AiSi)
     

@@ -102,13 +102,13 @@ def compute_equilibrium(a, b, z, W, n, shot_firm=None):  # with solve instead of
 
 def compute_cost(firm_id, a, b, W, X, P, h):
     labor_need = a[firm_id] * b[firm_id] * P[firm_id] * X[firm_id] / h
-    good_needs = (1 - a[firm_id]) * b[firm_id] * P[firm_id] * X[firm_id] * np.transpose(W[:,firm_id]) / P
+    good_needs = (1 - a[firm_id]) * b[firm_id] * P[firm_id] * X[firm_id] * np.transpose(W[:, firm_id]) / P
     cost = h * labor_need + np.sum(P * good_needs)
     return cost
 
 
-
-def evaluate_best_alternative_cost(firm_id, a, b, z, W, n, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm):
+def evaluate_best_alternative_cost(firm_id, a, b, z, W, n, Wbar, supplier_id_list, alternate_supplier_id_list,
+                                   shot_firm):
     """Compute the best profit reachable by a switch
     Nonmyopic version: the firm update the W based on the switch and compute the new network-wide equilibrium
     """
@@ -117,12 +117,13 @@ def evaluate_best_alternative_cost(firm_id, a, b, z, W, n, Wbar, supplier_id_lis
         W[id_visited_supplier, firm_id] = Wbar[id_visited_supplier, firm_id]
         for id_replaced_supplier in supplier_id_list[firm_id]:
             #print('test', firm_id, id_replaced_supplier, id_visited_supplier)
-            W[id_replaced_supplier, firm_id] = 0 # on enleve ce lien dans le W
+            W[id_replaced_supplier, firm_id] = 0  # on enleve ce lien dans le W
             new_eq = compute_equilibrium(a, b, z, W, n, shot_firm)
             new_cost = new_eq['P'][firm_id]  # compute_cost(firm_id, a, b, W, new_eq['X'], new_eq['P'], new_eq['h'])
             if new_cost < min_cost:
                 min_cost = new_cost
-            W[id_replaced_supplier, firm_id] = Wbar[id_replaced_supplier, firm_id] #apres le test d'un supplier, on remet le lien dans W
+            W[id_replaced_supplier, firm_id] = Wbar[
+                id_replaced_supplier, firm_id]  #apres le test d'un supplier, on remet le lien dans W
         W[id_visited_supplier, firm_id] = 0  # a la fin du test, on remet W comme avant
     return min_cost
 
@@ -141,7 +142,6 @@ def evalute_cost_penalty(firm_id, a, b, z, W, n, Wbar, supplier_id_list, alterna
     else:
         # print('Firm '+str(firm_id)+': not at the best profit')
         return abs(dif) / current_cost
-
 
 
 def compute_partial_equilibrium_and_cost(a, b, z, W, firms_within_tiers, id_rewiring_firm,
@@ -199,13 +199,13 @@ def compute_distance_btw_ntw2(g1, g2):
     EL2 = np.array(g2.get_edgelist())
     nb_common_rows_of2d_arrays(EL1, EL2)
     return nb_common_rows_of2d_arrays(EL1, EL2) / np.sqrt(g1.ecount() * g2.ecount())
-    
-    
+
+
 # Compute the number of common rows in 2d arrays
 def nb_common_rows_of2d_arrays(A, B):
     nrows, ncols = A.shape
-    dtype={'names':['f{}'.format(i) for i in range(ncols)],
-           'formats': ncols * [A.dtype]}
+    dtype = {'names': ['f{}'.format(i) for i in range(ncols)],
+             'formats': ncols * [A.dtype]}
     C = np.intersect1d(A.view(dtype), B.view(dtype))
     C = C.view(A.dtype).reshape(-1, ncols)
     nrows, ncols = C.shape
@@ -218,10 +218,10 @@ def draw_random_vector_normal(mean, sd, n, min_val=None, max_val=None):
         for k in range(len(vec)):
             if min_val:
                 if vec[k] < min_val:
-                    vec[k]=min_val
+                    vec[k] = min_val
             if max_val:
                 if vec[k] > max_val:
-                    vec[k]=max_val
+                    vec[k] = max_val
     return vec
 
 
@@ -250,4 +250,3 @@ def identify_firms_within_tier(id_firm, g, tier):
     neighboors = g.neighborhood(vertices=id_firm, order=tier, mode='all')
     neighboors.sort()
     return neighboors
-
