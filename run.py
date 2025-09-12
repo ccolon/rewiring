@@ -1,6 +1,7 @@
 import copy
 import os
 import pickle
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -465,3 +466,11 @@ if save_networks and compute_distance_matrix:
     res = compute_distance_matrix(output_folder)
     res.to_csv(os.path.join(output_folder, "distanceMatrix.csv"))
     # os.system('cd '+output_folder+'; rm M*.txt;')
+
+# Cleanup job-specific tmp directory unless explicitly kept
+if not keep_tmp_dir and os.path.exists(TMP_DIR):
+    try:
+        shutil.rmtree(TMP_DIR)
+        print(f"Cleaned up temporary directory: {TMP_DIR}")
+    except Exception as e:
+        print(f"Warning: Could not clean up temporary directory {TMP_DIR}: {e}")
