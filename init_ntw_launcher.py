@@ -5,13 +5,18 @@ def command(n, cc, AiSi_spread, ntw):
     return [
         "C:\\Users\\Celian\\miniforge3\\envs\\rewiring\\python.exe",
         "run.py",
-        "ts",
-        "50",  # maxRound
-        str(n),  # n value
-        str(cc),  # cc value
-        "0", "0", "0", "0",  # sigma_w, sigma_z, sigma_b, sigma_a
-        str(AiSi_spread),  # AiSi_spread
-        ntw, "testee", "10"
+        "--exp-type", "ts",
+        "--nb-rounds", "50",
+        "--nb-firms", str(n),
+        "--cc", str(cc),
+        "--sigma-w", "0",
+        "--sigma-z", "0", 
+        "--sigma-b", "0",
+        "--sigma-a", "0",
+        "--aisi-spread", str(AiSi_spread),
+        "--network-type", ntw,
+        "--exp-name", "testee",
+        "--tier", "10"
     ]
 
 
