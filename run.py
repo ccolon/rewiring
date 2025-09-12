@@ -162,6 +162,10 @@ if cache_firm_parameters:
 if inputed_network:
     subfolder = TMP_DIR
     initial_graph = igraph.load(os.path.join(subfolder, 'g0.' + format_graph), format=format_graph)
+    if initial_graph.vcount() != nb_firms:
+        print(("Inadequate inputed network: n is", nb_firms, "while g0.vcount() is", initial_graph.vcount()))
+        print(list(range(nb_firms)))
+        print([v.index for v in initial_graph.vs])
     tech_graph = igraph.load(os.path.join(subfolder, 'tech_graph.' + format_graph), format=format_graph)
     nb_suppliers = np.array(initial_graph.degree(list(range(nb_firms)), mode="in"))
     M0 = np.array(initial_graph.get_adjacency(attribute=None).data)
@@ -174,8 +178,6 @@ if inputed_network:
     supplier_id_list = np.load(os.path.join(subfolder, 'supplier_id_list.npy'), allow_pickle=True)
     alternate_supplier_id_list = np.load(os.path.join(subfolder, 'alternate_supplier_id_list.npy'), allow_pickle=True)
     AiSi = np.load(os.path.join(subfolder, 'AiSi.npy'), allow_pickle=True)
-    if initial_graph.vcount() != nb_firms:
-        print(("Inadequate inputed network: n is", nb_firms, "while g0.vcount() is", initial_graph.vcount()))
 
 ## Option 2: Generate new graphs
 else:
