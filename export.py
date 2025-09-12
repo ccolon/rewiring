@@ -9,7 +9,7 @@ import pandas as pd
 
 def create_general_output_folder(exp_type, exp_name):
     general_output_folder = os.path.join("output", exp_type + '_' + exp_name)
-    necessary_folder = ["tmp", "output", general_output_folder]
+    necessary_folder = ["output", general_output_folder]
     for folder in necessary_folder:
         if not os.path.exists(folder):
             os.makedirs(folder)

@@ -3,6 +3,7 @@ import os
 import pickle
 import subprocess
 import sys
+from datetime import datetime
 
 import igraph
 import numpy as np
@@ -15,6 +16,21 @@ from functions import draw_random_vector_normal, compute_cost_gap, identify_firm
 from generate_network import initialize_graph, create_technology_graph, identify_suppliers, get_tech_matrix, \
     get_initial_matrices, get_AiSi_productivities, compute_adjusted_z
 from parameters import *
+
+def get_job_specific_tmp_dir():
+    """Generate unique tmp directory name for this job to avoid conflicts in parallel execution"""
+    # Try SLURM_JOB_ID first, fallback to timestamp if not available
+    job_id = os.environ.get('SLURM_JOB_ID', datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
+    
+    tmp_dir = f'tmp_{job_id}'
+    
+    # Create directory if it doesn't exist
+    os.makedirs(tmp_dir, exist_ok=True)
+    
+    return tmp_dir
+
+# Get job-specific tmp directory (used for both network files and parameters)
+TMP_DIR = get_job_specific_tmp_dir()
 
 # Model parameters
 if len(sys.argv) > 1:
@@ -56,9 +72,9 @@ nb_extra_suppliers = np.full(nb_firms, cc)
 if inputed_network:
     cache_initial_network = False
     cache_firm_parameters = False
-    a = pickle.load(open('tmp/a', 'rb'))
-    b = pickle.load(open('tmp/b', 'rb'))
-    z = pickle.load(open('tmp/z', 'rb'))
+    a = pickle.load(open(os.path.join(TMP_DIR, 'a'), 'rb'))
+    b = pickle.load(open(os.path.join(TMP_DIR, 'b'), 'rb'))
+    z = pickle.load(open(os.path.join(TMP_DIR, 'z'), 'rb'))
 else:
     cache_initial_network = True
     cache_firm_parameters = True
@@ -89,15 +105,15 @@ else:
     print("z: min " + str(min(z)) + ' max ' + str(max(z)))
 
 if cache_firm_parameters:
-    pickle.dump(a, open('tmp/a', 'wb'))
-    pickle.dump(b, open('tmp/b', 'wb'))
-    pickle.dump(z, open('tmp/z', 'wb'))
+    pickle.dump(a, open(os.path.join(TMP_DIR, 'a'), 'wb'))
+    pickle.dump(b, open(os.path.join(TMP_DIR, 'b'), 'wb'))
+    pickle.dump(z, open(os.path.join(TMP_DIR, 'z'), 'wb'))
 
 #================================================================================
 # Create tech network Wbar and initial input-output network W0
 ## Option 1: Load existing network. needs g0, techgraph, M0, W0, c
 if inputed_network:
-    subfolder = 'initial_network'
+    subfolder = TMP_DIR
     initial_graph = igraph.load(os.path.join(subfolder, 'g0.' + format_graph), format=format_graph)
     tech_graph = igraph.load(os.path.join(subfolder, 'tech_graph.' + format_graph), format=format_graph)
     nb_suppliers = np.array(initial_graph.degree(list(range(nb_firms)), mode="in"))
@@ -130,7 +146,7 @@ print(("(1-a)*b*wji: max " + str(((1 - a) * b * Wbar).max())))
 # Export inputed network
 if export_initial_network:
     if not inputed_network:
-        subfolder = 'initial_network'
+        subfolder = TMP_DIR
         initial_graph.save(subfolder + '/' + 'g0' + '.' + format_graph, format=format_graph)
         tech_graph.save(subfolder+'/'+'tech_graph'+'.'+format_graph, format=format_graph)
         np.save(subfolder+'/'+'supplier_id_list', supplier_id_list)
@@ -397,7 +413,7 @@ print(f"Initial utility: {utility[0]}; final: {utility[-1]}. "
       f"Relative change: {(utility[-1] - utility[0]) / abs(utility[0])}")
 
 if export_final_network:
-    subfolder = 'initial_network'
+    subfolder = TMP_DIR
     g.save(os.path.join(subfolder, 'g0.' + format_graph), format=format_graph)
     tech_graph.save(os.path.join(subfolder, 'tech_graph.' + format_graph), format=format_graph)
     np.save(os.path.join(subfolder, 'supplier_id_list'), supplier_id_list)
