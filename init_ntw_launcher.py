@@ -1,9 +1,10 @@
 import subprocess
+import sys
 
 
 def command(n, cc, AiSi_spread, ntw):
     return [
-        "C:\\Users\\Celian\\miniforge3\\envs\\rewiring\\python.exe",
+        sys.executable,
         "run.py",
         "--exp-type", "ts",
         "--nb-rounds", "50",
