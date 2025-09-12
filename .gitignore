@@ -189,6 +189,7 @@ fabric.properties
 # project specific
 tmp/*
 output/*
+analysis
 
 # claude
 .claude
