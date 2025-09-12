@@ -11,5 +11,7 @@ gets longer, tous les 25, with 1000 ceiling, 50 per n, cc 2
 Create virtual environment
 pandas 0.23.1
 numpy 1.14.5
-On windows, pip install python-igraph==0.8.2
+scipy
 
+On windows, pip install python-igraph==0.8.2
+On linux 

@@ -189,3 +189,4 @@ fabric.properties
 # project specific
 tmp/*
 output/*
+CLAUDE.MD

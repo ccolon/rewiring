@@ -1,8 +1,11 @@
+import argparse
 import copy
 import os
 import pickle
+import shutil
 import subprocess
 import sys
+from datetime import datetime
 
 import igraph
 import numpy as np
@@ -16,31 +19,91 @@ from generate_network import initialize_graph, create_technology_graph, identify
     get_initial_matrices, get_AiSi_productivities, compute_adjusted_z
 from parameters import *
 
-# Model parameters
-if len(sys.argv) > 1:
-    sigma_w = float(sys.argv[5])
-    sigma_z = float(sys.argv[6])
-    sigma_b = float(sys.argv[7])
-    sigma_a = float(sys.argv[8])
-    AiSi_spread = float(sys.argv[9])
 
-    rewiring_test = 'try_all'
+def parse_arguments():
+    """Parse command line arguments using argparse"""
+    parser = argparse.ArgumentParser(description='Network rewiring simulation')
+    
+    # Required arguments
+    parser.add_argument('--exp-type', type=str, required=True,
+                        help='Experiment type (e.g., ts, initntw, hetero)')
+    parser.add_argument('--nb-rounds', type=int, required=True,
+                        help='Number of simulation rounds')
+    parser.add_argument('--nb-firms', type=int, required=True,
+                        help='Number of firms in the network')
+    parser.add_argument('--cc', type=int, required=True,
+                        help='Number of connections per firm')
+    
+    # Sigma parameters
+    parser.add_argument('--sigma-w', type=float, required=True,
+                        help='Sigma for weights')
+    parser.add_argument('--sigma-z', type=float, required=True,
+                        help='Sigma for productivity')
+    parser.add_argument('--sigma-b', type=float, required=True,
+                        help='Sigma for returns to scale')
+    parser.add_argument('--sigma-a', type=float, required=True,
+                        help='Sigma for labor share')
+    
+    # Other parameters
+    parser.add_argument('--aisi-spread', type=float, required=True,
+                        help='AiSi productivity spread parameter')
+    parser.add_argument('--network-type', type=str, required=True,
+                        choices=['new', 'inputed'],
+                        help='Whether to use new network or inputed network')
+    parser.add_argument('--exp-name', type=str, required=True,
+                        help='Experiment name for output files')
+    parser.add_argument('--tier', type=int, default=0,
+                        help='Tier parameter (default: 0)')
+    
+    return parser.parse_args()
 
-    # Whether to reuse an existing graph
-    if sys.argv[10] == "inputed":
-        inputed_network = True
-        novelty_suffix = ""
-    else:
-        inputed_network = False
-        novelty_suffix = '_NEWNET'
 
-    exp_name = sys.argv[11]
+def get_job_specific_tmp_dir():
+    """Generate unique tmp directory name for this job to avoid conflicts in parallel execution"""
+    # Try SLURM_JOB_ID first, fallback to timestamp if not available
+    job_id = os.environ.get('SLURM_JOB_ID', datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
 
-    # Do runs
-    nb_rounds = int(sys.argv[2])
-    nb_firms = int(sys.argv[3])
-    c = 4
-    cc = int(sys.argv[4])
+    tmp_dir = f'tmp_{job_id}'
+
+    # Create directory if it doesn't exist
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    return tmp_dir
+
+
+# Parse command line arguments
+args = parse_arguments()
+
+# Get job-specific tmp directory (used for both network files and parameters)
+TMP_DIR = get_job_specific_tmp_dir()
+
+# Model parameters from command line
+sigma_w = args.sigma_w
+sigma_z = args.sigma_z
+sigma_b = args.sigma_b
+sigma_a = args.sigma_a
+AiSi_spread = args.aisi_spread
+
+rewiring_test = 'try_all'
+
+# Whether to reuse an existing graph
+if args.network_type == "inputed":
+    inputed_network = True
+    novelty_suffix = ""
+else:
+    inputed_network = False
+    novelty_suffix = '_NEWNET'
+
+exp_name = args.exp_name
+
+# Do runs
+nb_rounds = args.nb_rounds
+nb_firms = args.nb_firms
+c = 4
+cc = args.cc
+
+# Override exp_type from parameters.py with command line argument
+exp_type = args.exp_type
 
 #================================================================================
 # Retrieve parameter name
@@ -56,9 +119,9 @@ nb_extra_suppliers = np.full(nb_firms, cc)
 if inputed_network:
     cache_initial_network = False
     cache_firm_parameters = False
-    a = pickle.load(open('tmp/a', 'rb'))
-    b = pickle.load(open('tmp/b', 'rb'))
-    z = pickle.load(open('tmp/z', 'rb'))
+    a = pickle.load(open(os.path.join(TMP_DIR, 'a'), 'rb'))
+    b = pickle.load(open(os.path.join(TMP_DIR, 'b'), 'rb'))
+    z = pickle.load(open(os.path.join(TMP_DIR, 'z'), 'rb'))
 else:
     cache_initial_network = True
     cache_firm_parameters = True
@@ -89,15 +152,15 @@ else:
     print("z: min " + str(min(z)) + ' max ' + str(max(z)))
 
 if cache_firm_parameters:
-    pickle.dump(a, open('tmp/a', 'wb'))
-    pickle.dump(b, open('tmp/b', 'wb'))
-    pickle.dump(z, open('tmp/z', 'wb'))
+    pickle.dump(a, open(os.path.join(TMP_DIR, 'a'), 'wb'))
+    pickle.dump(b, open(os.path.join(TMP_DIR, 'b'), 'wb'))
+    pickle.dump(z, open(os.path.join(TMP_DIR, 'z'), 'wb'))
 
 #================================================================================
 # Create tech network Wbar and initial input-output network W0
 ## Option 1: Load existing network. needs g0, techgraph, M0, W0, c
 if inputed_network:
-    subfolder = 'initial_network'
+    subfolder = TMP_DIR
     initial_graph = igraph.load(os.path.join(subfolder, 'g0.' + format_graph), format=format_graph)
     tech_graph = igraph.load(os.path.join(subfolder, 'tech_graph.' + format_graph), format=format_graph)
     nb_suppliers = np.array(initial_graph.degree(list(range(nb_firms)), mode="in"))
@@ -130,12 +193,12 @@ print(("(1-a)*b*wji: max " + str(((1 - a) * b * Wbar).max())))
 # Export inputed network
 if export_initial_network:
     if not inputed_network:
-        subfolder = 'initial_network'
+        subfolder = TMP_DIR
         initial_graph.save(subfolder + '/' + 'g0' + '.' + format_graph, format=format_graph)
-        tech_graph.save(subfolder+'/'+'tech_graph'+'.'+format_graph, format=format_graph)
-        np.save(subfolder+'/'+'supplier_id_list', supplier_id_list)
-        np.save(subfolder+'/'+'alternate_supplier_id_list', alternate_supplier_id_list)
-        np.save(subfolder+'/'+'AiSi', AiSi)
+        tech_graph.save(subfolder + '/' + 'tech_graph' + '.' + format_graph, format=format_graph)
+        np.save(subfolder + '/' + 'supplier_id_list', supplier_id_list)
+        np.save(subfolder + '/' + 'alternate_supplier_id_list', alternate_supplier_id_list)
+        np.save(subfolder + '/' + 'AiSi', AiSi)
         print(("Network data exported in folder:", subfolder))
 
 # Tier
@@ -327,7 +390,8 @@ for r in range(1, nb_rounds + 1):
             alternate_supplier_id_list[id_rewiring_firm].remove(id_supplier_toadd)
             alternate_supplier_id_list[id_rewiring_firm].append(id_supplier_toremove)
             if get_score:
-                score = compute_cost_gap(a, b, adjusted_z, W, n, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
+                score = compute_cost_gap(a, b, adjusted_z, W, n, Wbar, supplier_id_list, alternate_supplier_id_list,
+                                         shot_firm)
                 # print(score, min_score)
                 if score < min_score:
                     min_score = score
@@ -389,7 +453,8 @@ if t == nb_rounds * nb_firms:
 
 if get_last_score:
     adjusted_z = compute_adjusted_z(z, AiSi, supplier_id_list)
-    av_score = compute_cost_gap(a, b, adjusted_z, W, nb_firms, Wbar, supplier_id_list, alternate_supplier_id_list, shot_firm)
+    av_score = compute_cost_gap(a, b, adjusted_z, W, nb_firms, Wbar, supplier_id_list, alternate_supplier_id_list,
+                                shot_firm)
     min_score = av_score
 
 total_time = (datetime.now() - starting_time).total_seconds()
@@ -397,7 +462,7 @@ print(f"Initial utility: {utility[0]}; final: {utility[-1]}. "
       f"Relative change: {(utility[-1] - utility[0]) / abs(utility[0])}")
 
 if export_final_network:
-    subfolder = 'initial_network'
+    subfolder = TMP_DIR
     g.save(os.path.join(subfolder, 'g0.' + format_graph), format=format_graph)
     tech_graph.save(os.path.join(subfolder, 'tech_graph.' + format_graph), format=format_graph)
     np.save(os.path.join(subfolder, 'supplier_id_list'), supplier_id_list)
@@ -449,3 +514,11 @@ if save_networks and compute_distance_matrix:
     res = compute_distance_matrix(output_folder)
     res.to_csv(os.path.join(output_folder, "distanceMatrix.csv"))
     # os.system('cd '+output_folder+'; rm M*.txt;')
+
+# Cleanup job-specific tmp directory unless explicitly kept
+if not keep_tmp_dir and os.path.exists(TMP_DIR):
+    try:
+        shutil.rmtree(TMP_DIR)
+        print(f"Cleaned up temporary directory: {TMP_DIR}")
+    except Exception as e:
+        print(f"Warning: Could not clean up temporary directory {TMP_DIR}: {e}")

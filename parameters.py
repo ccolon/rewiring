@@ -49,6 +49,7 @@ get_score = False
 get_last_score = False
 tier = 0  # up to which tier should a firm have full knowledge. Valid if myopic. If tier high enough, should be the same as non-myopic
 scores_window = 5
+keep_tmp_dir = False  # Set to True to keep job-specific tmp directory after completion
 
 # up to which tier should a firm have full knowledge. Valid if myopic. If tier high enough, should be the same as non-myopic
 
