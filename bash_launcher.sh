@@ -15,7 +15,7 @@ for x in {1..5}; do
         for cc in 2 2; do
         #for tier in 0 1 2 3 4; do
             echo $n $cc $x
-            ~/miniforge3/envs/rewiring/bin/python3.10 run.py --exp-type ts --nb-rounds $maxRound --nb-firms $n --cc $cc --sigma-w $sigma_w --sigma-z $sigma_z --sigma-b $sigma_b --sigma-a $sigma_a --aisi-spread 0.01 --network-type new --exp-name slowing --tier $tier
+            ~/miniforge3/envs/rewiring/bin/python3.10 run.py --exp-type ts --nb-rounds $maxRound --nb-firms $n --cc $cc --sigma-w $sigma_w --sigma-z $sigma_z --sigma-b $sigma_b --sigma-a $sigma_a --aisi-spread 0.01 --network-type new_tech --exp-name slowing --tier $tier
         #done;
         done;
     done;

@@ -16,7 +16,7 @@ from export import create_export_folder, initialize_ts_file, initialize_rewiring
 from functions import draw_random_vector_normal, compute_cost_gap, identify_firms_within_tier, \
     draw_random_vector_lognormal, compute_equilibrium, compute_partial_equilibrium_and_cost, calculate_utility
 from generate_network import initialize_graph, create_technology_graph, identify_suppliers, get_tech_matrix, \
-    get_initial_matrices, get_AiSi_productivities, compute_adjusted_z
+    get_initial_matrices, get_AiSi_productivities, compute_adjusted_z, regenerate_network_from_cached_parameters
 from parameters import *
 
 
@@ -25,44 +25,48 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Network rewiring simulation')
     
     # Required arguments
-    parser.add_argument('--exp-type', type=str, required=True,
+    parser.add_argument('--exp-type', type=str, required=False, default="ts",
                         help='Experiment type (e.g., ts, initntw, hetero)')
-    parser.add_argument('--nb-rounds', type=int, required=True,
+    parser.add_argument('--nb-rounds', type=int, required=False, default=10,
                         help='Number of simulation rounds')
-    parser.add_argument('--nb-firms', type=int, required=True,
+    parser.add_argument('--nb-firms', type=int, required=False, default=20,
                         help='Number of firms in the network')
-    parser.add_argument('--cc', type=int, required=True,
+    parser.add_argument('--cc', type=int, required=False, default=4,
                         help='Number of connections per firm')
     
     # Sigma parameters
-    parser.add_argument('--sigma-w', type=float, required=True,
+    parser.add_argument('--sigma-w', type=float, required=False, default=0,
                         help='Sigma for weights')
-    parser.add_argument('--sigma-z', type=float, required=True,
+    parser.add_argument('--sigma-z', type=float, required=False, default=0,
                         help='Sigma for productivity')
-    parser.add_argument('--sigma-b', type=float, required=True,
+    parser.add_argument('--sigma-b', type=float, required=False, default=0,
                         help='Sigma for returns to scale')
-    parser.add_argument('--sigma-a', type=float, required=True,
+    parser.add_argument('--sigma-a', type=float, required=False, default=0,
                         help='Sigma for labor share')
     
     # Other parameters
-    parser.add_argument('--aisi-spread', type=float, required=True,
+    parser.add_argument('--aisi-spread', type=float, required=False, default=0,
                         help='AiSi productivity spread parameter')
-    parser.add_argument('--network-type', type=str, required=True,
-                        choices=['new', 'inputed'],
-                        help='Whether to use new network or inputed network')
+    parser.add_argument('--network-type', type=str, required=False, default="new_tech",
+                        choices=['new_tech', 'same_all', 'same_tech_new_init'],
+                        help='Network generation mode: new_tech (generate new), same_all (load cached), same_tech_new_init (cached params, new topology)')
     parser.add_argument('--exp-name', type=str, required=True,
                         help='Experiment name for output files')
-    parser.add_argument('--tier', type=int, default=0,
+    parser.add_argument('--tier', type=int, required=False, default=0,
                         help='Tier parameter (default: 0)')
     
     return parser.parse_args()
 
 
-def get_job_specific_tmp_dir():
+def get_job_specific_tmp_dir(exp_name, nb_firms, cc, AiSi_spread):
     """Generate unique tmp directory name for this job to avoid conflicts in parallel execution"""
     # Try SLURM_JOB_ID first, fallback to timestamp if not available
-    job_id = os.environ.get('SLURM_JOB_ID', datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
-
+    job_id = os.environ.get('SLURM_JOB_ID', datetime.now().strftime("%Y%m%d_%H%M"))
+    
+    # For init_ntw_launcher pattern, use experiment name to share cache across runs
+    if exp_name == 'testee':
+        job_id = f"initntw_{nb_firms}_{cc}_{AiSi_spread}"
+    
     tmp_dir = f'tmp_{job_id}'
 
     # Create directory if it doesn't exist
@@ -75,7 +79,7 @@ def get_job_specific_tmp_dir():
 args = parse_arguments()
 
 # Get job-specific tmp directory (used for both network files and parameters)
-TMP_DIR = get_job_specific_tmp_dir()
+TMP_DIR = get_job_specific_tmp_dir(args.exp_name, args.nb_firms, args.cc, args.aisi_spread)
 
 # Model parameters from command line
 sigma_w = args.sigma_w
@@ -86,12 +90,18 @@ AiSi_spread = args.aisi_spread
 
 rewiring_test = 'try_all'
 
-# Whether to reuse an existing graph
-if args.network_type == "inputed":
+# Network generation mode handling
+if args.network_type == "same_all":
     inputed_network = True
+    regenerate_from_cache = False
     novelty_suffix = ""
-else:
+elif args.network_type == "same_tech_new_init":
+    inputed_network = True  # Load cached parameters
+    regenerate_from_cache = True  # But regenerate network topology
+    novelty_suffix = '_REGEN'
+else:  # new_tech
     inputed_network = False
+    regenerate_from_cache = False
     novelty_suffix = '_NEWNET'
 
 exp_name = args.exp_name
@@ -122,7 +132,7 @@ if inputed_network:
     a = pickle.load(open(os.path.join(TMP_DIR, 'a'), 'rb'))
     b = pickle.load(open(os.path.join(TMP_DIR, 'b'), 'rb'))
     z = pickle.load(open(os.path.join(TMP_DIR, 'z'), 'rb'))
-else:
+else:  # new_tech mode
     cache_initial_network = True
     cache_firm_parameters = True
     # Economic parameters: global return to scale b
@@ -178,6 +188,16 @@ if inputed_network:
     supplier_id_list = np.load(os.path.join(subfolder, 'supplier_id_list.npy'), allow_pickle=True)
     alternate_supplier_id_list = np.load(os.path.join(subfolder, 'alternate_supplier_id_list.npy'), allow_pickle=True)
     AiSi = np.load(os.path.join(subfolder, 'AiSi.npy'), allow_pickle=True)
+    
+    # If regenerate_from_cache, create new network topology from cached parameters
+    if regenerate_from_cache:
+        print("Regenerating network topology from cached parameters...")
+        regen_result = regenerate_network_from_cached_parameters(a, b, z, Wbar, AiSi)
+        supplier_id_list = regen_result['supplier_id_list']
+        alternate_supplier_id_list = regen_result['alternate_supplier_id_list'] 
+        initial_graph = regen_result['initial_graph']
+        M0 = regen_result['M0']
+        W0 = regen_result['W0']
 
 ## Option 2: Generate new graphs
 else:

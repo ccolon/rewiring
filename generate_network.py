@@ -141,4 +141,91 @@ def get_AiSi_productivities(supplier_id_list: list, alternate_supplier_id_list: 
 def compute_adjusted_z(z: np.array, AiSi: list, supplier_id_list: list):
     current_AiSi = [AiSi_one_firm[tuple(sorted(supplier_id_list[i]))] for i, AiSi_one_firm in enumerate(AiSi)]
     return z * np.array(current_AiSi)
+
+
+def regenerate_network_from_cached_parameters(a: np.array, b: np.array, z: np.array, 
+                                              Wbar: np.array, AiSi: list):
+    """
+    Generate a new initial network by randomly selecting supplier combinations 
+    from cached AiSi parameters.
+    
+    This function creates a new network configuration by randomly selecting,
+    for each firm, one of the possible supplier combinations stored in AiSi.
+    The firm-level parameters (a, z, b) and technology matrix (Wbar) remain unchanged.
+    
+    Parameters:
+    -----------
+    a : np.array
+        Labor share parameters for each firm (unchanged)
+    b : np.array  
+        Returns to scale parameters for each firm (unchanged)
+    z : np.array
+        Productivity parameters for each firm (unchanged)
+    Wbar : np.array
+        Technology matrix with link weights (unchanged)
+    AiSi : list
+        List of dictionaries, one per firm, where each dictionary maps 
+        supplier combinations (tuples) to productivity multipliers
+        
+    Returns:
+    --------
+    dict : Dictionary containing:
+        - 'supplier_id_list': New list of selected suppliers for each firm
+        - 'alternate_supplier_id_list': Remaining suppliers for each firm
+        - 'initial_graph': New igraph network based on selected suppliers
+        - 'M0': New initial adjacency matrix
+        - 'W0': New initial weighted matrix  
+    """
+    nb_firms = len(a)
+    
+    # Step 1: Randomly select supplier combinations for each firm
+    new_supplier_id_list = []
+    for firm_id in range(nb_firms):
+        # Get all possible supplier combinations for this firm
+        possible_combinations = list(AiSi[firm_id].keys())
+        
+        # Randomly select one combination
+        selected_combination = random.choice(possible_combinations)
+        
+        # Convert tuple to list and store
+        new_supplier_id_list.append(list(selected_combination))
+    
+    # Step 2: Build alternate supplier lists
+    # For each firm, alternates are all other possible suppliers not currently selected
+    new_alternate_supplier_id_list = []
+    for firm_id in range(nb_firms):
+        # Get all possible suppliers from all combinations in AiSi
+        all_possible_suppliers = set()
+        for combination in AiSi[firm_id].keys():
+            all_possible_suppliers.update(combination)
+        
+        # Remove current suppliers to get alternates
+        current_suppliers = set(new_supplier_id_list[firm_id])
+        alternates = list(all_possible_suppliers - current_suppliers)
+        new_alternate_supplier_id_list.append(alternates)
+    
+    # Step 3: Create new igraph network from selected suppliers
+    import igraph
+    new_initial_graph = igraph.Graph(directed=True)
+    new_initial_graph.add_vertices(nb_firms)
+    
+    # Add edges based on selected supplier relationships
+    edges_to_add = []
+    for customer_id in range(nb_firms):
+        for supplier_id in new_supplier_id_list[customer_id]:
+            edges_to_add.append((supplier_id, customer_id))
+    
+    new_initial_graph.add_edges(edges_to_add)
+    
+    # Step 4: Create new adjacency matrices
+    M0_new = np.array(new_initial_graph.get_adjacency(attribute=None).data)
+    W0_new = M0_new * Wbar
+    
+    return {
+        'supplier_id_list': new_supplier_id_list,
+        'alternate_supplier_id_list': new_alternate_supplier_id_list,
+        'initial_graph': new_initial_graph,
+        'M0': M0_new,
+        'W0': W0_new
+    }
     

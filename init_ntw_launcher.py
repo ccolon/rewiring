@@ -21,11 +21,12 @@ def command(n, cc, AiSi_spread, ntw):
     ]
 
 
-n = 100
+n = 20
 cc = 4
 for x in range(10):
     for AiSi_spread in [0, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5]:
-        subprocess.run(command(n, cc, AiSi_spread, "new"))
+        subprocess.run(command(n, cc, AiSi_spread, "new_tech"))
         for y in range(49):
             print(n, cc, AiSi_spread, x, y)
-            subprocess.run(command(n, cc, AiSi_spread, "inputed"))
+            # subprocess.run(command(n, cc, AiSi_spread, "same_all"))
+            subprocess.run(command(n, cc, AiSi_spread, "same_tech_new_init"))
