@@ -10,6 +10,7 @@ from datetime import datetime
 import igraph
 import numpy as np
 import pandas as pd
+import yaml
 
 from export import create_export_folder, initialize_ts_file, initialize_rewiring_file, export_parameters, \
     append_ts_file, export_summary_file, export_final_matrix, create_general_output_folder
@@ -20,42 +21,124 @@ from generate_network import initialize_graph, create_technology_graph, identify
 from parameters import *
 
 
+def load_config(config_path='config.yml'):
+    """Load configuration from YAML file if it exists"""
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            print(f"Loaded configuration from {config_path}")
+            return config if config else {}
+    return {}
+
+
+def generate_economic_parameter(param_config, n, cli_sigma=None, param_name='param'):
+    """
+    Generate economic parameter vector based on mode configuration
+
+    Args:
+        param_config: Dictionary with mode and parameters
+        n: Number of firms
+        cli_sigma: Command-line sigma (overrides config if provided)
+        param_name: Parameter name for logging (b, z, etc.)
+
+    Returns:
+        numpy array of parameter values
+    """
+    mode = param_config.get('mode', 'normal')
+
+    # Command-line sigma forces normal mode
+    if cli_sigma is not None and cli_sigma != 0:
+        mode = 'normal'
+        sigma = cli_sigma
+        mean = param_config.get('mean', 1.0)
+        bound_min = param_config.get('bound_min', 0.0)
+        bound_max = param_config.get('bound_max', 1.0)
+        values = draw_random_vector_normal(mean, sigma, n, bound_min, bound_max)
+        print(f"{param_name} (CLI normal): min {min(values):.4f}, max {max(values):.4f}, mean {np.mean(values):.4f}")
+        return values
+
+    if mode == 'homogeneous':
+        value = param_config.get('value', 1.0)
+        values = np.full(n, value)
+        print(f"{param_name} (homogeneous): value {value}")
+        return values
+
+    elif mode == 'uniform':
+        min_val = param_config.get('min', 0.0)
+        max_val = param_config.get('max', 1.0)
+        values = np.random.uniform(min_val, max_val, n)
+        print(f"{param_name} (uniform): min {min(values):.4f}, max {max(values):.4f}, mean {np.mean(values):.4f}")
+        return values
+
+    elif mode == 'normal':
+        mean = param_config.get('mean', 1.0)
+        sigma = param_config.get('sigma', 0.0)
+        bound_min = param_config.get('bound_min', 0.0)
+        bound_max = param_config.get('bound_max', 1.0)
+        values = draw_random_vector_normal(mean, sigma, n, bound_min, bound_max)
+        print(f"{param_name} (normal): min {min(values):.4f}, max {max(values):.4f}, mean {np.mean(values):.4f}")
+        return values
+
+    else:
+        raise ValueError(f"Unknown mode '{mode}' for parameter {param_name}")
+
+
 def parse_arguments():
-    """Parse command line arguments using argparse"""
+    """Parse command line arguments using argparse and return args with economic config"""
+    # Load config file first to get defaults
+    config = load_config()
+
     parser = argparse.ArgumentParser(description='Network rewiring simulation')
-    
+
     # Required arguments
-    parser.add_argument('--exp-type', type=str, required=False, default="ts",
+    parser.add_argument('--exp-type', type=str, required=False,
+                        default=config.get('exp_type', 'ts'),
                         help='Experiment type (e.g., ts, initntw, hetero)')
-    parser.add_argument('--nb-rounds', type=int, required=False, default=10,
+    parser.add_argument('--nb-rounds', type=int, required=False,
+                        default=config.get('nb_rounds', 10),
                         help='Number of simulation rounds')
-    parser.add_argument('--nb-firms', type=int, required=False, default=20,
+    parser.add_argument('--nb-firms', type=int, required=False,
+                        default=config.get('nb_firms', 20),
                         help='Number of firms in the network')
-    parser.add_argument('--cc', type=int, required=False, default=4,
+    parser.add_argument('--cc', type=int, required=False,
+                        default=config.get('cc', 4),
                         help='Number of connections per firm')
-    
+
     # Sigma parameters
-    parser.add_argument('--sigma-w', type=float, required=False, default=0,
+    parser.add_argument('--sigma-w', type=float, required=False,
+                        default=config.get('sigma_w', 0),
                         help='Sigma for weights')
-    parser.add_argument('--sigma-z', type=float, required=False, default=0,
+    parser.add_argument('--sigma-z', type=float, required=False,
+                        default=config.get('sigma_z', 0),
                         help='Sigma for productivity')
-    parser.add_argument('--sigma-b', type=float, required=False, default=0,
+    parser.add_argument('--sigma-b', type=float, required=False,
+                        default=config.get('sigma_b', 0),
                         help='Sigma for returns to scale')
-    parser.add_argument('--sigma-a', type=float, required=False, default=0,
+    parser.add_argument('--sigma-a', type=float, required=False,
+                        default=config.get('sigma_a', 0),
                         help='Sigma for labor share')
-    
+
     # Other parameters
-    parser.add_argument('--aisi-spread', type=float, required=False, default=0,
+    parser.add_argument('--aisi-spread', type=float, required=False,
+                        default=config.get('aisi_spread', 0),
                         help='AiSi productivity spread parameter')
-    parser.add_argument('--network-type', type=str, required=False, default="new_tech",
+    parser.add_argument('--network-type', type=str, required=False,
+                        default=config.get('network_type', 'new_tech'),
                         choices=['new_tech', 'same_all', 'same_tech_new_init'],
                         help='Network generation mode: new_tech (generate new), same_all (load cached), same_tech_new_init (cached params, new topology)')
-    parser.add_argument('--exp-name', type=str, required=True,
+    parser.add_argument('--exp-name', type=str, required=False,
+                        default=config.get('exp_name', 'default_exp'),
                         help='Experiment name for output files')
-    parser.add_argument('--tier', type=int, required=False, default=0,
+    parser.add_argument('--tier', type=int, required=False,
+                        default=config.get('tier', 0),
                         help='Tier parameter (default: 0)')
-    
-    return parser.parse_args()
+
+    args = parser.parse_args()
+
+    # Attach economic_params config to args for later use
+    args.economic_params = config.get('economic_params', {})
+
+    return args
 
 
 def get_job_specific_tmp_dir(exp_name, nb_firms, cc, AiSi_spread):
@@ -87,6 +170,12 @@ sigma_z = args.sigma_z
 sigma_b = args.sigma_b
 sigma_a = args.sigma_a
 AiSi_spread = args.aisi_spread
+mean_tier = args.tier
+if mean_tier == -1:
+    myopic = True
+else:
+    myopic = False
+update_eq = True
 
 rewiring_test = 'try_all'
 
@@ -135,31 +224,34 @@ if inputed_network:
 else:  # new_tech mode
     cache_initial_network = True
     cache_firm_parameters = True
-    # Economic parameters: global return to scale b
-    # b
-    #b = np.full(n, 0.9)
-    eps = 5e-2
-    min_b = eps
-    max_b = 1 - eps
-    mean_b = 0.9
-    b = draw_random_vector_normal(mean_b, sigma_b, nb_firms, min_b, max_b)
-    #nb_different = 30
-    #b[0:nb_different] = b[0:nb_different]+1
-    print("b: min " + str(min(b)) + ' max ' + str(max(b)))
+
+    # Get economic parameters configuration
+    econ_params = args.economic_params
+
+    # Economic parameters: returns to scale b
+    b_config = econ_params.get('b', {})
+    # Command-line sigma_b overrides config
+    cli_sigma_b = sigma_b if sigma_b != 0 else None
+    b = generate_economic_parameter(b_config, nb_firms, cli_sigma_b, param_name='b')
 
     # Economic parameters: labor share a
-    eps = 5e-2
-    min_a = eps
+    a_config = econ_params.get('a', {})
+    mean_a = a_config.get('mean', 0.5)
+    eps_a = a_config.get('eps', 0.05)
+    min_a = eps_a
+    # Use command-line sigma_a if provided, otherwise use config sigma_a (default 0)
+    effective_sigma_a = sigma_a if sigma_a != 0 else a_config.get('sigma', 0)
+    # Generate a with per-firm max based on b values
     a = np.array(
-        [draw_random_vector_normal(0.5, sigma_a, nb_firms, min_a, min((1 - eps) / item, 1 - eps))[0] for item in
-         list(b)])
-    print("a: min " + str(min(a)) + ' max ' + str(max(a)))
-    #a[2] = 0.97
+        [draw_random_vector_normal(mean_a, effective_sigma_a, nb_firms, min_a, min((1 - eps_a) / item, 1 - eps_a))[0]
+         for item in list(b)])
+    print(f"a: min {min(a):.4f}, max {max(a):.4f}, mean {np.mean(a):.4f}")
 
     # Economic parameters: Productivity z
-    min_z = 1e-1
-    z = draw_random_vector_normal(1, sigma_z, nb_firms, min_val=min_z)
-    print("z: min " + str(min(z)) + ' max ' + str(max(z)))
+    z_config = econ_params.get('z', {})
+    # Command-line sigma_z overrides config
+    cli_sigma_z = sigma_z if sigma_z != 0 else None
+    z = generate_economic_parameter(z_config, nb_firms, cli_sigma_z, param_name='z')
 
 if cache_firm_parameters:
     pickle.dump(a, open(os.path.join(TMP_DIR, 'a'), 'wb'))
@@ -381,9 +473,18 @@ for r in range(1, nb_rounds + 1):
 
                 if estimated_new_cost < potential_cost - EPSILON:
                     potential_cost = estimated_new_cost
-                    if myopic:  # if myopic, the realized full equilibrium is computed after rewiring is done
+                    if myopic and update_eq:  # if myopic, the realized full equilibrium is computed after rewiring is done
                         new_eq = compute_equilibrium(a, b, adjusted_z, W, nb_firms, shot_firm)
-                    eq = new_eq
+                    # debug
+                    # print(f'DEBUG: firm {id_rewiring_firm} trying to replace {id_replaced_supplier} by {id_visited_supplier}')
+                    # print(f'suppliers: {g.neighbors(id_rewiring_firm, mode="in")}')
+                    # print(f'clients: {g.neighbors(id_rewiring_firm, mode="out")}')
+                    # print(b[id_rewiring_firm])
+                    # price_increase_cases = np.where(new_eq['P'] > eq['P'])[0]
+                    # for i in price_increase_cases:
+                    #     print(i, b[i], eq['P'][i], new_eq['P'][i])
+                    if update_eq:
+                        eq = new_eq
                     do_rewiring = True
                     id_supplier_toremove = id_replaced_supplier
                     id_supplier_toadd = id_visited_supplier
@@ -399,6 +500,7 @@ for r in range(1, nb_rounds + 1):
                 "Firm " + str(id_rewiring_firm),
                 "changed supplier " + str(id_supplier_toremove) + " to supplier " + str(id_supplier_toadd),
                 "cost decrease is " + str(current_cost - potential_cost)
+                # + f"price of removed suppliers, old {dropped_supplier_old_price}, new {dropped_supplier_new_price}"
             )
             if id_supplier_toadd == shot_firm:
                 print('ERROR: adding the deleted firm')
