@@ -2,7 +2,7 @@ import subprocess
 import sys
 
 
-def command(n, cc, AiSi_spread, ntw):
+def command(n, cc, AiSi_spread, ntw, iteration):
     return [
         sys.executable,
         "run.py",
@@ -16,17 +16,20 @@ def command(n, cc, AiSi_spread, ntw):
         "--sigma-a", "0",
         "--aisi-spread", str(AiSi_spread),
         "--network-type", ntw,
-        "--exp-name", "testee",
-        "--tier", "10"
+        "--exp-name", f"no_anticipation_same_rewiring_order",  # Include iteration to keep caches separate
+        "--anticipation-mode", "no_anticipation",  # Options: full, partial, no_anticipation
+        "--tier", "10",
+        "--export-initntw"  # Export init_ntw experiment data
     ]
 
 
 n = 20
 cc = 4
-for x in range(1):
-    for AiSi_spread in [0.01]: #, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5]:
-        subprocess.run(command(n, cc, AiSi_spread, "new_tech"))
-        # for y in range(49):
-        #     print(n, cc, AiSi_spread, x, y)
-        #     # subprocess.run(command(n, cc, AiSi_spread, "same_all"))
-        #     subprocess.run(command(n, cc, AiSi_spread, "same_tech_new_init"))
+AiSi_spread = 0.1
+for n in [20, 50]:
+    for x in range(20):  # 20 different initial networks
+        subprocess.run(command(n, cc, AiSi_spread, "new_tech", x))
+        for y in range(49):
+            print(n, cc, AiSi_spread, x, y)
+            subprocess.run(command(n, cc, AiSi_spread, "same_all", x))
+            # subprocess.run(command(n, cc, AiSi_spread, "same_tech_new_init", x))

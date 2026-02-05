@@ -8,8 +8,8 @@ exp_name = "AiSi"
 nb_rounds = 30
 nb_firms = 20
 c = 2
-cc = 2
-myopic = False
+# cc = 2
+partial_anticipation = False
 mean_tier = 10  # random.choice([0, 1, 2, 3, 4, 5, 6])
 sigma_tier = 0
 sigma_z = 0
@@ -47,11 +47,11 @@ hamiltonian = False
 print_score = False
 get_score = False
 get_last_score = False
-tier = 0  # up to which tier should a firm have full knowledge. Valid if myopic. If tier high enough, should be the same as non-myopic
+tier = 0  # up to which tier should a firm have full knowledge. Valid if partial_anticipation. If tier high enough, should be the same as full anticipation
 scores_window = 5
 keep_tmp_dir = True  # Set to True to keep job-specific tmp directory after completion
 
-# up to which tier should a firm have full knowledge. Valid if myopic. If tier high enough, should be the same as non-myopic
+# up to which tier should a firm have full knowledge. Valid if partial_anticipation. If tier high enough, should be the same as full anticipation
 
 exp_type = "initntw"
 
@@ -90,17 +90,17 @@ if exp_type == 'initntw':
     mean_tier = mean_tier
     sigma_tier = 0
     #export = True
-    myopic = False
+    partial_anticipation = False
 
-if exp_type == 'initntwMyopic':
-    myopic = True
+if exp_type == 'initntwPartial':
+    partial_anticipation = True
     export_initntw_experiment = True
     export_initial_network = True
     save_network_on_off = True
 
 if exp_type == 'slowing':
     simple_export = True
-    myopic = False
+    partial_anticipation = False
 
 if exp_type == 'heteroSaveTs':
     simple_export = False
@@ -124,13 +124,13 @@ if exp_type == "hamiltonian":
     apply_stop_condition = False
 
 if exp_type == "tier_hetero":
-    myopic = True
+    partial_anticipation = True
     simple_export = True
     mean_tier = mean_tier
     sigma_tier = mean_tier
 
 if exp_type == "tier_homo":
-    myopic = True
+    partial_anticipation = True
     simple_export = True
     mean_tier = mean_tier
     sigma_tier = 0
@@ -140,7 +140,7 @@ if exp_type == 'normal':
 
 if exp_type == "tier_ts":
     export = True
-    myopic = True
+    partial_anticipation = True
     simple_export = False
     mean_tier = mean_tier
     save_network_on_off = True

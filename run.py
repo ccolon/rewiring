@@ -4,8 +4,6 @@ import os
 import pickle
 import shutil
 import subprocess
-import sys
-from datetime import datetime
 
 import igraph
 import numpy as np
@@ -15,7 +13,8 @@ import yaml
 from export import create_export_folder, initialize_ts_file, initialize_rewiring_file, export_parameters, \
     append_ts_file, export_summary_file, export_final_matrix, create_general_output_folder
 from functions import draw_random_vector_normal, compute_cost_gap, identify_firms_within_tier, \
-    draw_random_vector_lognormal, compute_equilibrium, compute_partial_equilibrium_and_cost, calculate_utility
+    draw_random_vector_lognormal, compute_equilibrium, compute_partial_equilibrium_and_cost, calculate_utility, \
+    get_alpha, build_W_star_from_best_sets
 from generate_network import initialize_graph, create_technology_graph, identify_suppliers, get_tech_matrix, \
     get_initial_matrices, get_AiSi_productivities, compute_adjusted_z, regenerate_network_from_cached_parameters
 from parameters import *
@@ -129,9 +128,15 @@ def parse_arguments():
     parser.add_argument('--exp-name', type=str, required=False,
                         default=config.get('exp_name', 'default_exp'),
                         help='Experiment name for output files')
+    parser.add_argument('--anticipation-mode', type=str, required=False,
+                        default=config.get('anticipation_mode', 'full'),
+                        choices=['full', 'partial', 'no_anticipation', "aa"],
+                        help='Anticipation mode: full (compute full equilibrium), partial (compute partial equilibrium within tier distance), or no_anticipation (use current prices without recomputing equilibrium)')
     parser.add_argument('--tier', type=int, required=False,
                         default=config.get('tier', 0),
-                        help='Tier parameter (default: 0)')
+                        help='Tier parameter: neighborhood distance for partial anticipation mode (only used when anticipation-mode is partial)')
+    parser.add_argument('--export-initntw', action='store_true',
+                        help='Export init_ntw experiment data (sets export_initntw_experiment=True)')
 
     args = parser.parse_args()
 
@@ -145,11 +150,14 @@ def get_job_specific_tmp_dir(exp_name, nb_firms, cc, AiSi_spread):
     """Generate unique tmp directory name for this job to avoid conflicts in parallel execution"""
     # Try SLURM_JOB_ID first, fallback to timestamp if not available
     job_id = os.environ.get('SLURM_JOB_ID', datetime.now().strftime("%Y%m%d_%H%M"))
-    
+
     # For init_ntw_launcher pattern, use experiment name to share cache across runs
-    if exp_name == 'testee':
-        job_id = f"initntw_{nb_firms}_{cc}_{AiSi_spread}"
-    
+    # Check for common init_ntw experiment names (exact match or with suffix)
+    init_ntw_patterns = ['testee', 'no_anticipation', 'partial', 'full', "aa"]
+    if exp_name in init_ntw_patterns or any(exp_name.startswith(pattern + '_') for pattern in init_ntw_patterns):
+        # Use exp_name directly to allow different iterations to have different caches
+        job_id = f"{exp_name}_{nb_firms}_{cc}_{AiSi_spread}"
+
     tmp_dir = f'tmp_{job_id}'
 
     # Create directory if it doesn't exist
@@ -170,12 +178,34 @@ sigma_z = args.sigma_z
 sigma_b = args.sigma_b
 sigma_a = args.sigma_a
 AiSi_spread = args.aisi_spread
-mean_tier = args.tier
-if mean_tier == -1:
-    myopic = True
+# Override export_initntw_experiment if command-line flag is set
+if args.export_initntw:
+    export_initntw_experiment = True
+
+# Set anticipation mode
+anticipation_mode = args.anticipation_mode
+aa_mode = (anticipation_mode == 'aa')
+
+if anticipation_mode == 'partial':
+    partial_anticipation = True
+    no_anticipation = False
+    mean_tier = args.tier
+elif anticipation_mode == 'full':
+    partial_anticipation = False
+    no_anticipation = False
+    mean_tier = args.tier  # unused
+elif anticipation_mode == 'no_anticipation':
+    partial_anticipation = False
+    no_anticipation = True
+    mean_tier = args.tier  # unused
+elif anticipation_mode == 'aa':
+    partial_anticipation = False
+    no_anticipation = False
+    mean_tier = args.tier  # unused
 else:
-    myopic = False
-update_eq = True
+    raise ValueError(f"Unknown anticipation mode: {anticipation_mode}. Use 'full', 'partial', or 'no_anticipation'.")
+
+update_eq_mode = 'after_each_rewiring'  # after_each_rewiring or after_each_round or at_the_end (unused with aa)
 
 rewiring_test = 'try_all'
 
@@ -200,6 +230,7 @@ nb_rounds = args.nb_rounds
 nb_firms = args.nb_firms
 c = 4
 cc = args.cc
+print('cc', cc)
 
 # Override exp_type from parameters.py with command line argument
 exp_type = args.exp_type
@@ -315,11 +346,12 @@ if export_initial_network:
         np.save(subfolder + '/' + 'AiSi', AiSi)
         print(("Network data exported in folder:", subfolder))
 
-# Tier
+# Tier: defines neighborhood distance for partial anticipation mode
+# In full anticipation mode, tier is computed but not used
 min_tier = 0
 max_tier = 100  # g0.diameter()
 tier = draw_random_vector_lognormal(mean_tier, sigma_tier, nb_firms, min_tier, max_tier, integer=True)
-print(max_tier, tier)
+print(f"Anticipation mode: {anticipation_mode}, Mean tier: {mean_tier}, Tier values: {tier}")
 
 # Evaluate how far firms are to cover all networks
 initial_coverage = sum([len(identify_firms_within_tier(firm_id, initial_graph, tier[firm_id]))
@@ -396,8 +428,12 @@ W_last_3_round = W.copy()
 W_last_4_round = W.copy()
 W_last_5_round = W.copy()
 
-for r in range(1, nb_rounds + 1):
+if aa_mode:
+    P_ref = eq['P'].copy()  # all firms evaluate using the same prices
+    aa_best_supplier_set = supplier_id_list.copy()
+    aa_best_cost = P_ref.copy()
 
+for r in range(1, nb_rounds + 1):
     # Update the time-changing variable
     rewiring_ts_last_round = rewiring_ts
     W_last_5_round = W_last_4_round.copy()
@@ -408,9 +444,18 @@ for r in range(1, nb_rounds + 1):
 
     # Update the rewiring order
     rewiring_order = np.random.choice(list(range(0, nb_firms)), replace=False, size=nb_firms)
-
+    # rewiring_order = [7, 9, 12, 5, 8, 0, 4, 19, 15, 6, 13, 16, 1, 18, 17, 11, 2, 10, 3, 14]
     # Loop through each firm
     print("\nRound: " + str(r))
+
+    # --- AA ratchet: freeze prices within the round ---
+    if aa_mode:
+        # store best action per firm (synchronous update)
+        aa_do = np.zeros(nb_firms, dtype=bool)
+        aa_remove = np.full(nb_firms, -1, dtype=int)
+        aa_add = np.full(nb_firms, -1, dtype=int)
+        aa_adjusted_z = compute_adjusted_z(z, AiSi, aa_best_supplier_set)
+
     for i in range(nb_firms):
         t += 1
         # Select one rewiring firm
@@ -419,8 +464,9 @@ for r in range(1, nb_rounds + 1):
             continue
 
         # Update the delta W
-        deltaW = W.sum(axis=0) - 1
-        bModif = b * (1 + deltaW * (1 - a))
+        # deltaW = W.sum(axis=0) - 1
+        # bModif = b * (1 + deltaW * (1 - a))
+        current_adjusted_z_i = compute_adjusted_z(z, AiSi, supplier_id_list)[id_rewiring_firm]
 
         # Compute current mean cost
         current_cost = eq['P'][id_rewiring_firm]
@@ -434,10 +480,12 @@ for r in range(1, nb_rounds + 1):
         # Save W
         W_last_ts = W.copy()
 
+
         # Visit one supplier
         for id_visited_supplier in alternate_supplier_id_list[id_rewiring_firm]:
             if id_visited_supplier == shot_firm:
                 continue
+            alpha = get_alpha(a, W)
             # profit_dic[id_visited_supplier] = {}
             # score_dic[id_visited_supplier] = {}
             W[id_visited_supplier, id_rewiring_firm] = Wbar[
@@ -447,16 +495,31 @@ for r in range(1, nb_rounds + 1):
             for id_replaced_supplier in supplier_id_list[id_rewiring_firm]:
                 # print('test', id_rewiring_firm, id_replaced_supplier, id_visited_supplier)
                 W[id_replaced_supplier, id_rewiring_firm] = 0  # on enleve ce lien dans le W
-                # If firms are myopic, they anticipate their new profit based on the current equilibrium
-                # they do not take into account the impact of their rewiring on the system
-                # need to add a tmp_supplier_id_list to get the AiSi
+                # Compute adjusted productivity based on supplier changes
                 tmp_supplier_id_list = copy.deepcopy(supplier_id_list)
                 tmp_supplier_id_list[id_rewiring_firm].remove(id_replaced_supplier)
                 tmp_supplier_id_list[id_rewiring_firm].append(id_visited_supplier)
                 adjusted_z = compute_adjusted_z(z, AiSi, tmp_supplier_id_list)
 
-                if myopic:
-                    # need to update g igraph object so that we can apply the neighboorhood function
+                if no_anticipation:
+                    # No anticipation mode: use current equilibrium prices to naively estimate cost
+                    # The firm does NOT recompute equilibrium, just uses current prices with new supplier structure
+                    # share_inputs_from_old_supplier = (Wbar[id_replaced_supplier, id_rewiring_firm]
+                    #                                   * (1 - a[id_rewiring_firm])
+                    #                                   * eq['P'][id_rewiring_firm]) \
+                    #                                  / (eq['P'][id_replaced_supplier] * alpha[id_rewiring_firm])
+                    # current_cost = eq['P'][id_rewiring_firm]
+                    # delta_price = eq['P'][id_visited_supplier] - eq['P'][id_replaced_supplier]
+                    # estimated_new_cost = current_cost + share_inputs_from_old_supplier * delta_price
+
+                    #other method
+                    estimated_new_cost = (np.prod(np.power(eq['P'],
+                                                           (1-a[id_rewiring_firm]) * W[:, id_rewiring_firm]))
+                                          / current_adjusted_z_i)
+
+                elif partial_anticipation:
+                    # Partial anticipation mode: firms only see within tier[i] distance
+                    # Update graph to identify neighborhood, compute partial equilibrium
                     g.delete_edges([(id_replaced_supplier, id_rewiring_firm)])
                     g.add_edge(id_visited_supplier, id_rewiring_firm)
                     firms_within_tiers = identify_firms_within_tier(id_rewiring_firm, g, tier[id_rewiring_firm])
@@ -466,28 +529,46 @@ for r in range(1, nb_rounds + 1):
                                                                                           firms_within_tiers,
                                                                                           id_rewiring_firm,
                                                                                           shot_firm)
-                # otherwise firms have a perfect anticipation
-                else:
+                elif aa_mode:
+                    # AA: evaluate best response at frozen prices P_ref (no GE recomputation here)
+                    potential_cost = aa_best_cost[id_rewiring_firm]
+                    estimated_new_cost = (np.prod(np.power(P_ref, (1 - a[id_rewiring_firm]) * W[:, id_rewiring_firm]))
+                                          / aa_adjusted_z[id_rewiring_firm])
+
+                else:  # full anticipation
+                    # Full anticipation mode: firms compute full equilibrium
+                    adjusted_z = compute_adjusted_z(z, AiSi, tmp_supplier_id_list)
                     new_eq = compute_equilibrium(a, b, adjusted_z, W, nb_firms, shot_firm)
                     estimated_new_cost = new_eq['P'][id_rewiring_firm]
+                    # print(f"Firm {id_rewiring_firm} replacing {id_replaced_supplier} by {id_visited_supplier} "
+                    #       f"estimated_new_cost: {estimated_new_cost:.3f}; "
+                    #       f"current_cost: {current_cost:.3f}; "
+                    #       f"potential_cost: {potential_cost:.3f}")
+
+                # print(f'Firm {id_rewiring_firm} '
+                #       f'replacing {id_replaced_supplier} (AiSi={current_adjusted_z_i:.03f}, p={eq['P'][id_replaced_supplier]:.03f}) '
+                #       f'by {id_visited_supplier} (AiSi={adjusted_z[id_rewiring_firm]:.03f}, p={eq['P'][id_visited_supplier]:.03f}): '
+                #       f'current cost {current_cost:.03f}, new estimated cost {estimated_new_cost:.03f}')
+
 
                 if estimated_new_cost < potential_cost - EPSILON:
-                    potential_cost = estimated_new_cost
-                    if myopic and update_eq:  # if myopic, the realized full equilibrium is computed after rewiring is done
-                        new_eq = compute_equilibrium(a, b, adjusted_z, W, nb_firms, shot_firm)
-                    # debug
-                    # print(f'DEBUG: firm {id_rewiring_firm} trying to replace {id_replaced_supplier} by {id_visited_supplier}')
-                    # print(f'suppliers: {g.neighbors(id_rewiring_firm, mode="in")}')
-                    # print(f'clients: {g.neighbors(id_rewiring_firm, mode="out")}')
-                    # print(b[id_rewiring_firm])
-                    # price_increase_cases = np.where(new_eq['P'] > eq['P'])[0]
-                    # for i in price_increase_cases:
-                    #     print(i, b[i], eq['P'][i], new_eq['P'][i])
-                    if update_eq:
-                        eq = new_eq
+                    # print("    DO REWIRING")
                     do_rewiring = True
-                    id_supplier_toremove = id_replaced_supplier
-                    id_supplier_toadd = id_visited_supplier
+                    potential_cost = estimated_new_cost
+                    id_supplier_to_remove = id_replaced_supplier
+                    id_supplier_to_add = id_visited_supplier
+
+                if aa_mode and do_rewiring:
+                    aa_do[id_rewiring_firm] = True
+                    aa_remove[id_rewiring_firm] = id_supplier_to_remove
+                    aa_add[id_rewiring_firm] = id_supplier_to_add
+                    aa_best_cost[id_rewiring_firm] = estimated_new_cost
+                    aa_best_supplier_set[id_rewiring_firm] = sorted(list((set(supplier_id_list[id_rewiring_firm])
+                                                                  | {id_supplier_to_add}) - {id_supplier_to_remove}))
+                    # P_ref[id_rewiring_firm] = potential_cost
+
+                    # IMPORTANT: do not apply rewiring now in AA mode
+                    do_rewiring = False
 
                 # Apres le test d'un supplier à remplacer, on remet le lien dans W
                 W[id_replaced_supplier, id_rewiring_firm] = Wbar[id_replaced_supplier, id_rewiring_firm]
@@ -496,23 +577,29 @@ for r in range(1, nb_rounds + 1):
             W[id_visited_supplier, id_rewiring_firm] = 0  # a la fin du test, on remet W comme avant
 
         if do_rewiring:  # si jamais c'est bon, on remplace pour de bon
-            print(
-                "Firm " + str(id_rewiring_firm),
-                "changed supplier " + str(id_supplier_toremove) + " to supplier " + str(id_supplier_toadd),
-                "cost decrease is " + str(current_cost - potential_cost)
-                # + f"price of removed suppliers, old {dropped_supplier_old_price}, new {dropped_supplier_new_price}"
-            )
-            if id_supplier_toadd == shot_firm:
-                print('ERROR: adding the deleted firm')
+            print(f"    Firm {id_rewiring_firm} replaces supplier {id_supplier_to_remove} "
+                  f"by {id_supplier_to_add}, cost decrease is {current_cost - potential_cost}")
+            if id_supplier_to_add == shot_firm:
+                print('    ERROR: adding the deleted firm')
                 exit()
-            g.delete_edges([(id_supplier_toremove, id_rewiring_firm)])
-            g.add_edge(id_supplier_toadd, id_rewiring_firm)
-            W[id_supplier_toadd, id_rewiring_firm] = Wbar[id_supplier_toadd, id_rewiring_firm]
-            W[id_supplier_toremove, id_rewiring_firm] = 0
-            supplier_id_list[id_rewiring_firm].remove(id_supplier_toremove)
-            supplier_id_list[id_rewiring_firm].append(id_supplier_toadd)
-            alternate_supplier_id_list[id_rewiring_firm].remove(id_supplier_toadd)
-            alternate_supplier_id_list[id_rewiring_firm].append(id_supplier_toremove)
+            g.delete_edges([(id_supplier_to_remove, id_rewiring_firm)])
+            g.add_edge(id_supplier_to_add, id_rewiring_firm)
+            W[id_supplier_to_add, id_rewiring_firm] = Wbar[id_supplier_to_add, id_rewiring_firm]
+            W[id_supplier_to_remove, id_rewiring_firm] = 0
+            supplier_id_list[id_rewiring_firm].remove(id_supplier_to_remove)
+            supplier_id_list[id_rewiring_firm].append(id_supplier_to_add)
+            alternate_supplier_id_list[id_rewiring_firm].remove(id_supplier_to_add)
+            alternate_supplier_id_list[id_rewiring_firm].append(id_supplier_to_remove)
+
+            if not aa_mode:
+                # For partial and no anticipation: compute realized full equilibrium after rewiring is done
+                adjusted_z = compute_adjusted_z(z, AiSi, supplier_id_list)
+                new_eq = compute_equilibrium(a, b, adjusted_z, W, nb_firms, shot_firm)
+            if update_eq_mode == "after_each_rewiring":
+                print(f"    Last price: {eq['P'][id_rewiring_firm]:.3f}; "
+                      f"new price: {new_eq['P'][id_rewiring_firm]:.3f}")
+                eq = new_eq
+
             if get_score:
                 score = compute_cost_gap(a, b, adjusted_z, W, n, Wbar, supplier_id_list, alternate_supplier_id_list,
                                          shot_firm)
@@ -554,11 +641,79 @@ for r in range(1, nb_rounds + 1):
         if export:
             append_ts_file(time_series_file, t, rewiring_ts, utility_ts, eq, export_prices_productions, score)
 
+    if update_eq_mode == "after_each_round":
+        eq = new_eq
+
+    # --- AA ratchet: apply all rewires simultaneously, then recompute GE once ---
+    if aa_mode:
+        #     any_rewire = aa_do.any()
+        #     if any_rewire:
+        #         for firm_id in np.where(aa_do)[0]:
+        # if firm_id == shot_firm:
+        #     continue
+        # rem = aa_remove[firm_id]
+        # add = aa_add[firm_id]
+        # if rem < 0 or add < 0:
+        #     continue
+        #
+        # print(
+        #     f"    [AA] Firm {firm_id} replaces supplier {rem} by {add}, "
+        #     f"estimated cost decrease is {eq['P'][firm_id] - aa_best_cost[firm_id]}"
+        # )
+        #
+        # # apply to graph + matrices + lists
+        # g.delete_edges([(rem, firm_id)])
+        # g.add_edge(add, firm_id)
+        #
+        # W[add, firm_id] = Wbar[add, firm_id]
+        # W[rem, firm_id] = 0
+        #
+        # supplier_id_list[firm_id].remove(rem)
+        # supplier_id_list[firm_id].append(add)
+        # alternate_supplier_id_list[firm_id].remove(add)
+        # alternate_supplier_id_list[firm_id].append(rem)
+
+        # rewiring_ts += 1  # count rewires (synchronous)
+        aa_adjusted_z = compute_adjusted_z(z, AiSi, aa_best_supplier_set)
+        P_next = aa_best_cost.copy()#np.minimum(P_ref, aa_best_cost)
+
+        # stopping criterion on prices (not on rewiring_ts)
+        max_rel = np.max(np.abs(P_next - P_ref) / np.maximum(P_ref, 1e-12))
+        print(f"[AA] nb of swaps: {np.sum(aa_do)}")
+        print(f"[AA] max rel price change = {max_rel:.3e}")
+        print(P_next)
+        if max_rel < 1e-10:
+            print(f"[AA] Price fixed point reached after {r} rounds.")
+            print(aa_do)
+            print(aa_best_supplier_set)
+            Wstar = build_W_star_from_best_sets(aa_best_supplier_set, Wbar)
+            aa_adjusted_z = compute_adjusted_z(z, AiSi, aa_best_supplier_set)
+            final_eq = compute_equilibrium(a, b, aa_adjusted_z, Wstar, nb_firms, shot_firm)
+            print(P_next)
+            print(final_eq['P'])
+            break
+
+        current_Wbest = build_W_star_from_best_sets(aa_best_supplier_set, Wbar)
+        current_eq = compute_equilibrium(a, b, aa_adjusted_z, current_Wbest, nb_firms, shot_firm)
+        print(aa_adjusted_z)
+        # print(W)
+        P_ge = current_eq['P']
+        P_ratchet = P_next  # or P_next if you already updated
+        rel_err = (P_ge - P_ratchet) / P_ratchet
+        print(f"[AA diag] max rel diff |P_ge - P_ratchet| / P_ratchet = "
+              f"{np.max(np.abs(rel_err)):.3e}")
+        P_ref = P_next
+
+
     # Stop condition
-    if apply_stop_condition:
+    if apply_stop_condition and not aa_mode:
         if rewiring_ts == rewiring_ts_last_round:
             eq_reached = 1
             print(f"Network equilibrium reached after {r - 1} rounds and {rewiring_ts} rewirings.")
+            print([sorted(l) for l in supplier_id_list])
+            adjusted_z = compute_adjusted_z(z, AiSi, supplier_id_list)
+            final_eq = compute_equilibrium(a, b, adjusted_z, W, nb_firms, shot_firm)
+            print(final_eq)
             break
         if np.all(W == W_last_2_round) & np.all(W_last_round == W_last_3_round) \
                 & np.all(W_last_2_round == W_last_4_round) & np.all(W_last_3_round == W_last_5_round):

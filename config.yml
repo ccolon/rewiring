@@ -3,12 +3,12 @@
 
 # Experiment settings
 exp_type: ts  # Experiment type (ts, initntw, hetero, tier_ts, slowing, shootOneSaveFinal)
-exp_name: default_exp  # Experiment name for output files
+exp_name: aa  # Experiment name for output files
 
 # Simulation parameters
-nb_rounds: 10  # Number of simulation rounds
-nb_firms: 20  # Number of firms in the network
-cc: 4  # Number of connections per firm
+nb_rounds: 50  # Number of simulation rounds
+nb_firms: 50  # Number of firms in the network
+cc: 1  # Number of extra potential supplier per firm
 
 # Economic variance parameters (0 = no variance)
 # Note: Command-line --sigma-* arguments override these and force "normal" mode
@@ -18,16 +18,23 @@ sigma_b: 0.0  # Sigma for returns to scale
 sigma_a: 0.0  # Sigma for labor share
 
 # Network parameters
-aisi_spread: 0.0  # AiSi productivity spread parameter
+aisi_spread: 0.2  # AiSi productivity spread parameter, < 1
 network_type: new_tech  # Network generation mode: new_tech (generate new), same_all (load cached), same_tech_new_init (cached params, new topology)
-tier: 0  # Tier parameter (0 = perfect anticipation, -1 = myopic, >0 = limited information)
+
+# Anticipation mode for firm rewiring decisions
+anticipation_mode: aa  # Options:
+  # - full (compute full equilibrium),
+  # - partial (compute partial equilibrium within tier distance),
+  # - no_anticipation (use current prices without recomputing equilibrium)
+  # - aa (ratchet of aa, only works at CRS)
+tier: 1  # Tier parameter: neighborhood distance for partial anticipation mode (only used when anticipation_mode is partial)
 
 # Economic parameter generation settings (only used when network_type is new_tech)
 economic_params:
   b:  # Returns to scale
     mode: homogeneous  # Options: homogeneous, uniform, normal
     # For homogeneous mode:
-    value: 1
+    value: 1.0
     # For uniform mode:
     min: 0.8
     max: 0.95

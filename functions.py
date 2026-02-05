@@ -24,6 +24,7 @@ def calculate_utility(eq):
     return -np.sum(prices)
 
 
+
 def compute_equilibrium(a, b, z, W, n, shot_firm=None):  # with solve instead of inv
     if isinstance(shot_firm, int):
         a = np.delete(a, shot_firm)  # Creates a new array for a
@@ -64,7 +65,7 @@ def compute_equilibrium(a, b, z, W, n, shot_firm=None):  # with solve instead of
 
     # Get p, by passing prod function to the log and solve Ap = b
     b_vector = (-np.log(z) + b * alpha * np.log(alpha) + (1 - b * alpha) * np.log(v))[:, np.newaxis]
-    A_matrix = np.eye(n) - (b * (1 - a))[:, np.newaxis] * W
+    A_matrix = np.eye(n) - (b * (1 - a))[:, np.newaxis] * W.T
 
     log_p = np.linalg.solve(A_matrix, b_vector)
     p = np.exp(log_p)
@@ -78,7 +79,8 @@ def compute_equilibrium(a, b, z, W, n, shot_firm=None):  # with solve instead of
     if check:
         l = v * a / alpha
         # G = np.transpose(v * (1 - a) / alpha * W.T / np.transpose(p))
-        G = v * (1 - a) * W / alpha / p[:, np.newaxis]
+        # G = v * (1 - a) * W / alpha / p[:, np.newaxis]
+        G = (W * (v * (1 - a) / alpha)[None, :]) / p[:, None]
         L = np.sum(l)
         B = L
         print("Quantity of labor", L, "Budget", B)
@@ -90,6 +92,29 @@ def compute_equilibrium(a, b, z, W, n, shot_firm=None):  # with solve instead of
         print("intermediary_demand", intermediary_demand)
         print("final_demand", final_demand)
         print("dif", supply - (intermediary_demand + final_demand) > 1e-10)
+
+        # Check for CRS case
+        p1_calculated = np.prod(np.power(p, (1-a[1]) * W[:,1])) / z[1]
+        print("b1", b[1], "alpha1", alpha[1], "sumWcol1", W[:, 1].sum())
+        print(f"p1 {p[1]}", f"p1_calculated {p1_calculated}")
+
+        log_p1_calc = (
+                -np.log(z[1])
+                + b[1] * alpha[1] * np.log(alpha[1])
+                + (1 - b[1] * alpha[1]) * np.log(v[1])
+                + np.sum(b[1] * (1 - a[1]) * W[:, 1] * np.log(p))
+        )
+        p1_calculated = np.exp(log_p1_calc)
+        print(p[1], p1_calculated, p[1] - p1_calculated)
+
+        p1_col = np.exp(-np.log(z[1]) + (1 - a[1]) * np.sum(W[:, 1] * np.log(p)))
+        p1_row = np.exp(-np.log(z[1]) + (1 - a[1]) * np.sum(W[1, :] * np.log(p)))
+
+        print("p[1]    =", p[1])
+        print("col chk =", p1_col)  # uses W[:,1]
+        print("row chk =", p1_row)  # uses W[1,:]
+
+        exit()
 
     productions = x.flatten()
     prices = p.flatten()
@@ -110,7 +135,7 @@ def compute_cost(firm_id, a, b, W, X, P, h):
 def evaluate_best_alternative_cost(firm_id, a, b, z, W, n, Wbar, supplier_id_list, alternate_supplier_id_list,
                                    shot_firm):
     """Compute the best profit reachable by a switch
-    Nonmyopic version: the firm update the W based on the switch and compute the new network-wide equilibrium
+    Full anticipation version: the firm updates the W based on the switch and computes the new network-wide equilibrium
     """
     min_cost = 9999
     for id_visited_supplier in alternate_supplier_id_list[firm_id]:
@@ -250,3 +275,36 @@ def identify_firms_within_tier(id_firm, g, tier):
     neighboors = g.neighborhood(vertices=id_firm, order=tier, mode='all')
     neighboors.sort()
     return neighboors
+
+
+def build_W_star_from_best_sets(
+    aa_best_supplier_set,
+    Wbar: np.ndarray,
+    n: int | None = None,
+) -> np.ndarray:
+    """
+    Build W_star (supplier->buyer IO matrix) from aa_best_supplier_set and Wbar.
+
+    Convention: W[supplier, buyer] = w_{supplier,buyer}.
+    aa_best_supplier_set[buyer] is an iterable of supplier ids chosen for that buyer.
+    Wbar contains the predetermined coefficients; non-chosen links are set to 0.
+
+    Note: this preserves the Wbar column-sum condition if Wbar already satisfies it
+    on the chosen suppliers (as in your setup).
+    """
+    if n is None:
+        n = Wbar.shape[0]
+
+    W_star = np.zeros((n, n), dtype=Wbar.dtype)
+
+    for buyer, suppliers in enumerate(aa_best_supplier_set):
+        # allow list/tuple/set/np.array
+        if suppliers is None:
+            continue
+        suppliers = list(suppliers)
+        if len(suppliers) == 0:
+            continue
+
+        W_star[suppliers, buyer] = Wbar[suppliers, buyer]
+
+    return W_star
