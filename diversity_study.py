@@ -22,6 +22,7 @@ skipped even though they used different parameters. Use a distinct
 OUTPUT_FILE for each parameter combination to avoid this.
 """
 
+import argparse
 import csv
 import json
 import os
@@ -39,7 +40,7 @@ from utils import generate_parameter, generate_a_parameter
 
 
 # =============================================================================
-# CONFIGURATION  (edit here before each run)
+# CONFIGURATION  (defaults; overridden by CLI args when provided)
 # =============================================================================
 
 N_MIN = 10
@@ -235,5 +236,67 @@ def run_study():
     print(f"Done. Results saved to {OUTPUT_FILE}")
 
 
+def parse_config_arg(s):
+    """Parse a config string like 'homogeneous:0.5' or 'uniform:0.5:1.5' into a dict."""
+    parts = s.split(':')
+    mode = parts[0]
+    if mode == 'homogeneous':
+        return {'mode': 'homogeneous', 'value': float(parts[1])}
+    elif mode == 'uniform':
+        return {'mode': 'uniform', 'min': float(parts[1]), 'max': float(parts[2])}
+    else:
+        raise ValueError(f"Unknown config mode: {mode}")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Diversity study')
+    parser.add_argument('--n_min', type=int, default=None)
+    parser.add_argument('--n_max', type=int, default=None)
+    parser.add_argument('--n_tech', type=int, default=None)
+    parser.add_argument('--n_trials', type=int, default=None)
+    parser.add_argument('--nb_rounds', type=int, default=None)
+    parser.add_argument('--cc', type=int, default=None)
+    parser.add_argument('--aisi_spread', type=float, default=None)
+    parser.add_argument('--sigma_w', type=float, default=None)
+    parser.add_argument('--max_swaps', type=int, default=None)
+    parser.add_argument('--b_config', type=str, default=None,
+                        help='e.g. homogeneous:0.9 or uniform:0.5:1.5')
+    parser.add_argument('--a_config', type=str, default=None,
+                        help='e.g. homogeneous:0.5 or uniform:0.3:0.7')
+    parser.add_argument('--z_config', type=str, default=None,
+                        help='e.g. homogeneous:1.0 or uniform:0.5:2.0')
+    parser.add_argument('--output', type=str, default=None)
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
+
+    if args.n_min is not None:
+        N_MIN = args.n_min
+    if args.n_max is not None:
+        N_MAX = args.n_max
+    if args.n_tech is not None:
+        N_TECH_MATRICES = args.n_tech
+    if args.n_trials is not None:
+        N_TRIALS = args.n_trials
+    if args.nb_rounds is not None:
+        NB_ROUNDS = args.nb_rounds
+    if args.cc is not None:
+        CC = args.cc
+    if args.aisi_spread is not None:
+        AISI_SPREAD = args.aisi_spread
+    if args.sigma_w is not None:
+        SIGMA_W = args.sigma_w
+    if args.max_swaps is not None:
+        MAX_SWAPS = args.max_swaps
+    if args.b_config is not None:
+        B_CONFIG = parse_config_arg(args.b_config)
+    if args.a_config is not None:
+        A_CONFIG = parse_config_arg(args.a_config)
+    if args.z_config is not None:
+        Z_CONFIG = parse_config_arg(args.z_config)
+    if args.output is not None:
+        OUTPUT_FILE = args.output
+
     run_study()
