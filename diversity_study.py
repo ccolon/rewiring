@@ -59,6 +59,8 @@ A_CONFIG = {'mode': 'homogeneous', 'value': 0.5}
 B_CONFIG = {'mode': 'homogeneous', 'value': 0.9}
 Z_CONFIG = {'mode': 'homogeneous', 'value': 1.0}
 
+BASE_SEED = 0  # Monte Carlo offset; different values -> independent RNG streams
+
 OUTPUT_FILE = "diversity_results.csv"
 
 
@@ -95,7 +97,7 @@ CSV_FIELDNAMES = [
     'n', 'tech_idx', 'series', 'diversity',
     'c', 'cc', 'aisi_spread', 'sigma_w', 'max_swaps', 'nb_rounds', 'n_trials',
     'a_config', 'b_config', 'z_config',
-    'tech_seed',
+    'base_seed', 'tech_seed',
 ]
 
 
@@ -150,10 +152,11 @@ def run_study():
 
             # ------------------------------------------------------------------
             # Build technology matrix for this (n, tech_idx) pair.
-            # tech_seed = tech_idx so seeds 0..N_TECH_MATRICES-1 are used
-            # independently for each n.
+            # tech_seed = BASE_SEED * 10000 + tech_idx so different BASE_SEED
+            # values give independent Monte Carlo streams.
             # ------------------------------------------------------------------
-            tech_seed = tech_idx
+            tech_seed = BASE_SEED * 10000 + tech_idx
+            seed_off = BASE_SEED * 10000
 
             # Draw economic parameters before generate_base_network re-seeds.
             random.seed(tech_seed)
@@ -177,6 +180,7 @@ def run_study():
                 'a_config': json.dumps(A_CONFIG),
                 'b_config': json.dumps(B_CONFIG),
                 'z_config': json.dumps(Z_CONFIG),
+                'base_seed': BASE_SEED,
                 'tech_seed': tech_seed,
             }
 
@@ -191,7 +195,7 @@ def run_study():
                 for trial in range(N_TRIALS):
                     result = run_full_simulation(
                         base_state, a, b, z,
-                        seed=1000 + trial,
+                        seed=seed_off + 1000 + trial,
                         max_swaps=MAX_SWAPS,
                         nb_rounds=NB_ROUNDS,
                     )
@@ -215,11 +219,11 @@ def run_study():
                 final_lists = []
                 for trial in range(N_TRIALS):
                     trial_state = generate_random_initial_network(
-                        n, Wbar, AiSi, seed=2000 + trial,
+                        n, Wbar, AiSi, seed=seed_off + 2000 + trial,
                     )
                     result = run_full_simulation(
                         trial_state, a, b, z,
-                        seed=3000 + trial,
+                        seed=seed_off + 3000 + trial,
                         max_swaps=MAX_SWAPS,
                         nb_rounds=NB_ROUNDS,
                     )
@@ -265,6 +269,8 @@ def parse_args():
                         help='e.g. homogeneous:0.5 or uniform:0.3:0.7')
     parser.add_argument('--z_config', type=str, default=None,
                         help='e.g. homogeneous:1.0 or uniform:0.5:2.0')
+    parser.add_argument('--base_seed', type=int, default=None,
+                        help='Monte Carlo offset; different values give independent RNG streams')
     parser.add_argument('--output', type=str, default=None)
     return parser.parse_args()
 
@@ -296,6 +302,8 @@ if __name__ == "__main__":
         A_CONFIG = parse_config_arg(args.a_config)
     if args.z_config is not None:
         Z_CONFIG = parse_config_arg(args.z_config)
+    if args.base_seed is not None:
+        BASE_SEED = args.base_seed
     if args.output is not None:
         OUTPUT_FILE = args.output
 
