@@ -79,7 +79,7 @@ Z_CONFIG = {
 
 # Network parameters
 SIGMA_W = 0.0  # Weight variance (0 = uniform weights)
-AISI_SPREAD = 0.2  # AiSi productivity spread parameter
+AISI_SPREAD = 0.1  # AiSi productivity spread parameter
 
 
 # =============================================================================
@@ -140,7 +140,7 @@ def run_full_simulation(seed=None, verbose=True):
 
     if verbose:
         print(f"  Initial utility: {initial_utility:.4f}")
-        print(f"  Initial prices: [{eq['P'].min():.4f}, {eq['P'].max():.4f}]")
+        print(f"  Initial prices: [{eq['P'].min():.4f}, {eq['P'].max():.4f}], {eq['P']}")
 
     # Main simulation loop
     if verbose:
