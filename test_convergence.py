@@ -18,6 +18,20 @@ Compare mode (--compare):
 - Runs both AA and Full on the same network(s)
 - Compares whether they reach the same equilibrium
 - Uses consistent parameters: a=0.5, b=1.0, z=1.0
+
+Compare swaps mode (--compare_swaps):
+- For each max_swaps value, runs n_trials from different starting points
+- Same technology matrix (Wbar, AiSi) shared across all max_swaps values
+- Measures diversity of equilibria within each max_swaps group
+- Cross-compares: does higher max_swaps improve utility / reduce diversity?
+- Default: compare max_swaps=1 vs 2; override with --swap_values=1,2,3
+- Works with both AA (--aa) and Full (--full) simulation modes
+
+Sweep mode (--sweep):
+- Loops over all combos: b in {0.9, 1.0, 1.1, U(0.8,1.2)}, cc in {1,2,3,4}, max_swaps in {1,2}
+- For each combo, runs n_trials from different starting networks
+- Reports convergence, uniqueness, utility spread in a summary table
+- Usage: python test_convergence.py --aa --sweep --trials=10
 """
 
 import copy
@@ -47,29 +61,29 @@ from utils import (
 # TEST CONFIGURATION (modify here to run without command line)
 # =============================================================================
 
-SIM_MODE = "full"  # "aa" or "full"
+SIM_MODE = "aa"  # "aa" or "full"
 TEST_MODE = "different_start_same_parameter"  # "same_start_different_order" or "different_start_same_parameter"
 COMPARE_MODES = False  # If True, compare AA vs Full instead of running single mode
+COMPARE_SWAPS = False  # If True, compare max_swaps=1 vs max_swaps=2 on same network(s)
 
 # Shared parameters
-NB_FIRMS = 20
+NB_FIRMS = 50
 NB_ROUNDS = 20
 C = 4
-CC = 2
+CC = 1
 AISI_SPREAD = 0.1
-MAX_SWAPS = 2  # max number of simultaneous supplier swaps (1 = single, 2 = up to dual)
+MAX_SWAPS = 1  # max number of simultaneous supplier swaps (1 = single, 2 = up to dual)
 
 # AA mode parameters
 A_VALUE = 0.5  # homogeneous labor share for AA mode
 
 # Full mode parameters (can be homogeneous or heterogeneous)
-B_CONFIG = {'mode': 'homogeneous', 'value': 1.0}
+# B_CONFIG = {'mode': 'homogeneous', 'value': 1.1}
+B_CONFIG = {'mode': 'uniform', 'min': 0.5, "max": 1.5}
 A_CONFIG = {'mode': 'homogeneous', 'value': 0.5}
 Z_CONFIG = {'mode': 'homogeneous', 'value': 1.0}
+# Z_CONFIG = {'mode': 'uniform', 'min': 0.5, "max": 1.5}
 SIGMA_W = 0.0
-
-# b-sweep: homogeneous b values to test for convergence
-B_VALUES = [0.9, 1.0, 1.1]
 
 # Test parameters
 N_TRIALS = 10
@@ -165,13 +179,30 @@ def generate_random_initial_network(n, Wbar, AiSi, seed):
 # AA MODE SIMULATION
 # =============================================================================
 
-def run_aa_simulation(network_state, a, seed=None, max_swaps=1, nb_rounds=None):
+def run_aa_simulation(network_state, a, seed=None, max_swaps=1, nb_rounds=None,
+                      b=None, z=None):
     """Run AA mode simulation (simplified, for testing).
 
+    Firms evaluate supplier swaps using frozen reference prices (AA principle):
+        cost = prod(P_ref^((1-a)*W_col)) / z_i
+
+    After all firms decide, swaps are applied and equilibrium is recomputed.
+
+    When b is None (CRS mode, b=1): uses compute_equilibrium_crs, backward compatible.
+    When b is provided (non-CRS): uses compute_equilibrium_full with true equilibrium
+    recomputation at the end of each round.
+
     Args:
+        network_state: Network state dict from generate_base_network.
+        a: Labor share (scalar for CRS, array for non-CRS).
+        seed: Random seed for permutation order.
         max_swaps: Maximum number of simultaneous supplier swaps (1=single, 2=up to dual).
         nb_rounds: Number of rounds (defaults to module-level NB_ROUNDS).
+        b: Returns to scale array (None for CRS mode).
+        z: Base productivity array (None for CRS mode).
     """
+    crs_mode = b is None
+
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
@@ -184,26 +215,39 @@ def run_aa_simulation(network_state, a, seed=None, max_swaps=1, nb_rounds=None):
     W = network_state['W0'].copy()
 
     # Initial equilibrium
-    adjusted_z = compute_adjusted_z(AiSi, supplier_id_list)
-    eq = compute_equilibrium_crs(a, adjusted_z, W, n)
-    initial_utility = -eq['P'].sum()
+    if crs_mode:
+        adjusted_z = compute_adjusted_z(AiSi, supplier_id_list)
+        eq = compute_equilibrium_crs(a, adjusted_z, W, n)
+        initial_utility = -eq['P'].sum()
+    else:
+        adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
+        eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+        initial_utility = calculate_utility(eq)
 
     P_ref = eq['P'].copy()
-    aa_best_cost = P_ref.copy()
+
+    # For the decision formula, we need scalar (1-a) per firm
+    # In CRS mode a is scalar; in non-CRS mode a is array
+    if crs_mode:
+        one_minus_a = (1 - a)  # scalar
+    else:
+        one_minus_a = (1 - a)  # array, indexed per firm below
 
     _nb_rounds = nb_rounds if nb_rounds is not None else NB_ROUNDS
     for r in range(1, _nb_rounds + 1):
         aa_do = np.zeros(n, dtype=bool)
-        aa_removes = [None] * n  # list of suppliers to remove (length 1 or 2)
-        aa_adds = [None] * n     # list of suppliers to add (length 1 or 2)
+        aa_removes = [None] * n
+        aa_adds = [None] * n
 
         for id_firm in np.random.permutation(n):
+            # Per-firm (1-a) factor
+            oma = one_minus_a if crs_mode else one_minus_a[id_firm]
+
             current_W_col = np.zeros(n)
             for s in supplier_id_list[id_firm]:
                 current_W_col[s] = Wbar[s, id_firm]
             current_z = AiSi[id_firm][tuple(int(s) for s in sorted(supplier_id_list[id_firm]))]
-            current_cost = np.prod(np.power(P_ref, (1 - a) * current_W_col)) / current_z
-            aa_best_cost[id_firm] = current_cost
+            current_cost = np.prod(np.power(P_ref, oma * current_W_col)) / current_z
             potential_cost = current_cost
             best_removes, best_adds = None, None
 
@@ -220,7 +264,7 @@ def run_aa_simulation(network_state, a, seed=None, max_swaps=1, nb_rounds=None):
                         for s in new_set:
                             W_col[s] = Wbar[s, id_firm]
                         test_z = AiSi[id_firm][tuple(sorted(int(s) for s in new_set))]
-                        cost = np.prod(np.power(P_ref, (1 - a) * W_col)) / test_z
+                        cost = np.prod(np.power(P_ref, oma * W_col)) / test_z
 
                         if cost < potential_cost - EPSILON:
                             potential_cost = cost
@@ -230,11 +274,11 @@ def run_aa_simulation(network_state, a, seed=None, max_swaps=1, nb_rounds=None):
                 aa_do[id_firm] = True
                 aa_removes[id_firm] = best_removes
                 aa_adds[id_firm] = best_adds
-                aa_best_cost[id_firm] = potential_cost
 
-        P_next = aa_best_cost.copy()
-        max_rel = np.max(np.abs(P_next - P_ref) / np.maximum(P_ref, 1e-12))
+        # Count rewirings
+        rewirings_this_round = sum(1 for d in aa_do if d)
 
+        # Apply swaps
         for id_firm in range(n):
             if aa_do[id_firm]:
                 for old_s, new_s in zip(aa_removes[id_firm], aa_adds[id_firm]):
@@ -246,20 +290,34 @@ def run_aa_simulation(network_state, a, seed=None, max_swaps=1, nb_rounds=None):
 
         W = build_W_from_suppliers(supplier_id_list, Wbar)
 
-        if max_rel < CONVERGENCE_THRESHOLD:
+        # Convergence: no rewiring happened
+        if rewirings_this_round == 0:
             break
 
-        P_ref = P_next
+        # Recompute true equilibrium for new network
+        if crs_mode:
+            adjusted_z = compute_adjusted_z(AiSi, supplier_id_list)
+            eq = compute_equilibrium_crs(a, adjusted_z, W, n)
+        else:
+            adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
+            eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
 
-    # Final equilibrium
-    final_z = compute_adjusted_z(AiSi, supplier_id_list)
-    final_eq = compute_equilibrium_crs(a, final_z, W, n)
+        P_ref = eq['P'].copy()
+
+    # Final equilibrium (if we broke out on round 1 with no swaps, eq is already current)
+    if crs_mode:
+        final_z = compute_adjusted_z(AiSi, supplier_id_list)
+        final_eq = compute_equilibrium_crs(a, final_z, W, n)
+        final_utility = -final_eq['P'].sum()
+    else:
+        final_eq = eq  # already computed at end of last round
+        final_utility = calculate_utility(final_eq)
 
     return {
-        'converged': max_rel < CONVERGENCE_THRESHOLD,
+        'converged': rewirings_this_round == 0,
         'rounds': r,
         'initial_utility': initial_utility,
-        'final_utility': -final_eq['P'].sum(),
+        'final_utility': final_utility,
         'final_prices': final_eq['P'],
         'final_supplier_list': supplier_id_list,
     }
@@ -370,7 +428,8 @@ def run_full_simulation(network_state, a, b, z, seed=None, max_swaps=1, nb_round
 
 def run_convergence_test(sim_mode="aa", test_mode="same_start_different_order",
                          n_trials=10, network_seed=42, cc=CC, show_comparison=False,
-                         max_swaps=1):
+                         max_swaps=1, b_config=None, a_config=None, z_config=None,
+                         quiet=False):
     """
     Test convergence properties for AA or Full anticipation mode.
 
@@ -381,53 +440,63 @@ def run_convergence_test(sim_mode="aa", test_mode="same_start_different_order",
         network_seed: Seed for generating Wbar and AiSi
         cc: Number of alternate suppliers per firm
         show_comparison: Show detailed comparison of mismatches
+        b_config: Override B_CONFIG dict (default: use module-level B_CONFIG)
+        a_config: Override A_CONFIG dict (default: use module-level A_CONFIG)
+        z_config: Override Z_CONFIG dict (default: use module-level Z_CONFIG)
+        quiet: If True, suppress per-trial output (for sweep mode)
+
+    Returns:
+        dict with keys: 'all_match', 'all_converged', 'n_distinct',
+              'n_converged', 'max_price_diff', 'utilities'
     """
+    _b_config = b_config if b_config is not None else B_CONFIG
+    _a_config = a_config if a_config is not None else A_CONFIG
+    _z_config = z_config if z_config is not None else Z_CONFIG
+
     n = NB_FIRMS
     same_initial_network = (test_mode == "same_start_different_order")
 
-    print("=" * 70)
-    print(f"{sim_mode.upper()} TEST: {test_mode}")
-    if same_initial_network:
-        print("Same initial network, different permutation orders")
-    else:
-        print("Different initial networks, same Wbar/AiSi")
-    print("=" * 70)
-    print(f"Max swaps per rewiring: {max_swaps}")
+    if not quiet:
+        print("=" * 70)
+        print(f"{sim_mode.upper()} TEST: {test_mode}")
+        if same_initial_network:
+            print("Same initial network, different permutation orders")
+        else:
+            print("Different initial networks, same Wbar/AiSi")
+        print("=" * 70)
+        print(f"Max swaps per rewiring: {max_swaps}")
 
-    # Generate economic parameters for full mode
-    if sim_mode == "full":
-        random.seed(network_seed)
-        np.random.seed(network_seed)
-        b = generate_parameter(B_CONFIG, n, 'b', verbose=True)
-        a = generate_a_parameter(A_CONFIG, b, n, verbose=True)
-        z = generate_parameter(Z_CONFIG, n, 'z', verbose=True)
+    # Generate economic parameters
+    random.seed(network_seed)
+    np.random.seed(network_seed)
+    b = generate_parameter(_b_config, n, 'b', verbose=not quiet)
+    a = generate_a_parameter(_a_config, b, n, verbose=not quiet)
+    z = generate_parameter(_z_config, n, 'z', verbose=not quiet)
+    if not quiet:
         print(f"\n  a*b: max={np.max(a * b):.4f} (must be < 1)")
-    else:
-        a = A_VALUE
-        b = None
-        z = None
 
-    print(f"\nParameters: n={n}, c={C}, cc={cc}, AiSi_spread={AISI_SPREAD}")
-    print(f"Network seed (for Wbar/AiSi): {network_seed}")
-    print(f"Number of trials: {n_trials}")
+    if not quiet:
+        print(f"\nParameters: n={n}, c={C}, cc={cc}, AiSi_spread={AISI_SPREAD}")
+        print(f"Network seed (for Wbar/AiSi): {network_seed}")
+        print(f"Number of trials: {n_trials}")
 
     # Generate base network
-    print("\nGenerating Wbar and AiSi...")
-    if sim_mode == "full":
-        base_state = generate_base_network(n, C, cc, AISI_SPREAD, seed=network_seed,
-                                           a=a, b=b, sigma_w=SIGMA_W)
-    else:
-        base_state = generate_base_network(n, C, cc, AISI_SPREAD, seed=network_seed)
+    if not quiet:
+        print("\nGenerating Wbar and AiSi...")
+    base_state = generate_base_network(n, C, cc, AISI_SPREAD, seed=network_seed,
+                                       a=a, b=b, sigma_w=SIGMA_W)
 
     Wbar = base_state['Wbar']
     AiSi = base_state['AiSi']
 
     combos_per_firm = [len(AiSi[firm]) for firm in range(n)]
-    print(f"  Possible supplier combinations per firm: min={min(combos_per_firm)}, max={max(combos_per_firm)}")
+    if not quiet:
+        print(f"  Possible supplier combinations per firm: min={min(combos_per_firm)}, max={max(combos_per_firm)}")
 
     # Run trials
-    print(f"\nRunning {n_trials} trials...")
-    print("-" * 70)
+    if not quiet:
+        print(f"\nRunning {n_trials} trials...")
+        print("-" * 70)
 
     results = []
     for trial in range(n_trials):
@@ -443,7 +512,8 @@ def run_convergence_test(sim_mode="aa", test_mode="same_start_different_order",
 
         # Run appropriate simulation
         if sim_mode == "aa":
-            result = run_aa_simulation(trial_state, a, seed=perm_seed, max_swaps=max_swaps)
+            result = run_aa_simulation(trial_state, a, seed=perm_seed, max_swaps=max_swaps,
+                                       b=b, z=z)
         else:
             result = run_full_simulation(trial_state, a, b, z, seed=perm_seed, max_swaps=max_swaps)
 
@@ -451,17 +521,25 @@ def run_convergence_test(sim_mode="aa", test_mode="same_start_different_order",
 
         final_hash = hash(tuple(tuple(sorted(s)) for s in result['final_supplier_list']))
 
-        print(f"Trial {trial + 1:2d}: "
-              f"init_hash={init_hash % 10000:04d}, "
-              f"final_hash={final_hash % 10000:04d}, "
-              f"rounds={result['rounds']:2d}, "
-              f"utility={result['final_utility']:.6f}, "
-              f"price_range=[{result['final_prices'].min():.4f}, {result['final_prices'].max():.4f}]")
+        if not quiet:
+            print(f"Trial {trial + 1:2d}: "
+                  f"init_hash={init_hash % 10000:04d}, "
+                  f"final_hash={final_hash % 10000:04d}, "
+                  f"rounds={result['rounds']:2d}, "
+                  f"utility={result['final_utility']:.6f}, "
+                  f"price_range=[{result['final_prices'].min():.4f}, {result['final_prices'].max():.4f}]")
 
     # Compare results
-    print("\n" + "=" * 70)
-    print("COMPARISON")
-    print("=" * 70)
+    n_converged = sum(1 for r in results if r['converged'])
+    all_converged = (n_converged == n_trials)
+
+    # Count distinct equilibria by supplier hash
+    hashes = [
+        hash(tuple(tuple(sorted(s)) for s in r['final_supplier_list']))
+        for r in results
+    ]
+    n_distinct = len(set(hashes))
+    utilities = np.array([r['final_utility'] for r in results])
 
     ref = results[0]
     ref_prices = ref['final_prices']
@@ -476,44 +554,52 @@ def run_convergence_test(sim_mode="aa", test_mode="same_start_different_order",
         max_price_diff = max(max_price_diff, price_diff)
         if price_diff > 1e-10:
             prices_match = False
-            if show_comparison:
+            if show_comparison and not quiet:
                 print(f"  Trial {i}: Price mismatch! Max diff = {price_diff:.6e}")
 
         for firm in range(n):
             if sorted(res['final_supplier_list'][firm]) != sorted(ref_suppliers[firm]):
                 suppliers_match = False
-                if show_comparison:
+                if show_comparison and not quiet:
                     print(f"  Trial {i}: Supplier mismatch for firm {firm}!")
                     print(f"    Reference: {sorted(ref_suppliers[firm])}")
                     print(f"    Trial {i}:  {sorted(res['final_supplier_list'][firm])}")
 
-    print(f"\nMax price difference across trials: {max_price_diff:.6e}")
+    all_match = prices_match and suppliers_match
 
-    # Summary
-    print("\n" + "=" * 70)
-    print("RESULT")
-    print("=" * 70)
+    if not quiet:
+        print("\n" + "=" * 70)
+        print("COMPARISON")
+        print("=" * 70)
+        print(f"Max price difference across trials: {max_price_diff:.6e}")
 
-    if prices_match and suppliers_match:
-        print("PASS: All trials converged to identical equilibrium")
-        print(f"  - Final prices: identical across all {n_trials} trials")
-        print(f"  - Final network: identical across all {n_trials} trials")
-        if same_initial_network:
-            print("  -> Permutation order does NOT affect result")
+        print("\n" + "=" * 70)
+        print("RESULT")
+        print("=" * 70)
+        print(f"Converged: {n_converged}/{n_trials}")
+        print(f"Distinct equilibria: {n_distinct}/{n_trials}")
+
+        if all_match:
+            print("PASS: All trials converged to identical equilibrium")
+            if same_initial_network:
+                print("  -> Permutation order does NOT affect result")
+            else:
+                print("  -> Equilibrium is UNIQUE (path-independent)")
         else:
-            print("  -> Equilibrium is UNIQUE (path-independent)")
-    else:
-        print("FAIL: Trials converged to different equilibria")
-        if not prices_match:
-            print("  - Prices differ across trials")
-        if not suppliers_match:
-            print("  - Network structure differs across trials")
-        if same_initial_network:
-            print("  -> Permutation order DOES affect result (unexpected!)")
-        else:
-            print("  -> Equilibrium is NOT unique (path-dependent)")
+            print("FAIL: Trials converged to different equilibria")
+            if not prices_match:
+                print("  - Prices differ across trials")
+            if not suppliers_match:
+                print("  - Network structure differs across trials")
 
-    return prices_match and suppliers_match
+    return {
+        'all_match': all_match,
+        'all_converged': all_converged,
+        'n_converged': n_converged,
+        'n_distinct': n_distinct,
+        'max_price_diff': max_price_diff,
+        'utilities': utilities,
+    }
 
 
 # =============================================================================
@@ -643,152 +729,318 @@ def run_compare_test(test_mode="same_start_different_order", n_trials=10,
 
 
 # =============================================================================
-# B-SWEEP: CONVERGENCE AS A FUNCTION OF b
+# COMPARE SWAPS TEST
 # =============================================================================
 
-def run_b_sweep(b_values=None, test_mode="different_start_same_parameter",
-                n_trials=10, network_seed=123, cc=CC, max_swaps=MAX_SWAPS):
+def run_compare_swaps(sim_mode="full", test_mode="different_start_same_parameter",
+                      n_trials=10, network_seed=42, cc=CC, show_comparison=False,
+                      swap_values=None):
     """
-    For each homogeneous b value, run n_trials full-mode simulations and report
-    convergence diagnostics.
+    Assess how the diversity of equilibria changes with max_swaps.
 
-    This helps understand:
-    - b < 1 (decreasing returns): expected to converge well
-    - b = 1 (constant returns): boundary case
-    - b > 1 (increasing returns): may fail to converge or produce cycles
+    For each max_swaps value, runs n_trials simulations from different starting
+    networks (or different permutation orders) using the SAME technology matrix
+    (Wbar, AiSi, z, a, b). Then measures within-group diversity: how many
+    distinct equilibria, spread of utilities, and pairwise price differences.
+
+    Args:
+        sim_mode: "aa" or "full"
+        test_mode: "same_start_different_order" or "different_start_same_parameter"
+        n_trials: Number of trials per max_swaps value
+        network_seed: Seed for generating Wbar and AiSi
+        cc: Number of alternate suppliers per firm
+        show_comparison: Show per-trial details
+        swap_values: List of max_swaps values to compare (default [1, 2])
     """
-    if b_values is None:
-        b_values = B_VALUES
+    if swap_values is None:
+        swap_values = [1, 2]
+
     n = NB_FIRMS
     same_initial_network = (test_mode == "same_start_different_order")
 
-    print("=" * 72)
-    print("B-SWEEP CONVERGENCE STUDY  (SIM_MODE=full, COMPARE_MODES=False)")
-    print(f"b values: {b_values}")
-    print(f"n={n}, c={C}, cc={cc}, AiSi_spread={AISI_SPREAD}, max_swaps={max_swaps}")
-    print(f"Rounds={NB_ROUNDS}, Trials={n_trials}, Network seed={network_seed}")
-    print(f"Test mode: {test_mode}")
-    print("=" * 72)
+    print("=" * 70)
+    print(f"COMPARE SWAPS DIVERSITY — {sim_mode.upper()}: {test_mode}")
+    print(f"max_swaps values: {swap_values}")
+    if same_initial_network:
+        print("Same initial network, different permutation orders")
+    else:
+        print("Different initial networks, same Wbar/AiSi")
+    print("=" * 70)
 
-    summary_table = []
+    # Generate economic parameters (shared across all max_swaps values)
+    random.seed(network_seed)
+    np.random.seed(network_seed)
+    b = generate_parameter(B_CONFIG, n, 'b', verbose=True)
+    a = generate_a_parameter(A_CONFIG, b, n, verbose=True)
+    z = generate_parameter(Z_CONFIG, n, 'z', verbose=True)
+    print(f"\n  a*b: max={np.max(a * b):.4f} (must be < 1)")
 
-    for b_val in b_values:
-        print(f"\n{'=' * 72}")
-        print(f"  b = {b_val}  (homogeneous)")
-        print(f"{'=' * 72}")
+    print(f"\nParameters: n={n}, c={C}, cc={cc}, AiSi_spread={AISI_SPREAD}")
+    print(f"Network seed (for Wbar/AiSi): {network_seed}")
+    print(f"Trials per max_swaps: {n_trials}")
 
-        # Generate economic parameters for this b value
-        b_config = {'mode': 'homogeneous', 'value': b_val}
-        random.seed(network_seed)
-        np.random.seed(network_seed)
-        b = generate_parameter(b_config, n, 'b', verbose=True)
-        a = generate_a_parameter(A_CONFIG, b, n, verbose=True)
-        z = generate_parameter(Z_CONFIG, n, 'z', verbose=True)
-        print(f"  a*b: max={np.max(a * b):.4f}, min={np.min(a * b):.4f}")
-        print(f"  (1-a)*b: max={np.max((1 - a) * b):.4f}")
+    # Generate base network (shared across all max_swaps values)
+    print("\nGenerating Wbar and AiSi...")
+    base_state = generate_base_network(n, C, cc, AISI_SPREAD, seed=network_seed,
+                                       a=a, b=b, sigma_w=SIGMA_W)
 
-        # Generate base network with these parameters
-        base_state = generate_base_network(n, C, cc, AISI_SPREAD, seed=network_seed,
-                                           a=a, b=b, sigma_w=SIGMA_W)
-        Wbar = base_state['Wbar']
-        AiSi = base_state['AiSi']
+    Wbar = base_state['Wbar']
+    AiSi = base_state['AiSi']
 
-        # Diagnostic: check weight bounds
-        active_weights = Wbar[Wbar > 0]
-        print(f"  Wbar: min={active_weights.min():.4f}, max={active_weights.max():.4f}, "
-              f"mean={active_weights.mean():.4f}")
-        # Spectral radius condition: b*(1-a)*w should be < 1
-        bw_products = np.array([
-            b_val * (1 - a[j]) * Wbar[i, j]
-            for j in range(n) for i in range(n) if Wbar[i, j] > 0
-        ])
-        print(f"  b*(1-a)*w_ij: max={bw_products.max():.4f} (should be < 1 for price eq. stability)")
+    combos_per_firm = [len(AiSi[firm]) for firm in range(n)]
+    print(f"  Supplier combinations per firm: min={min(combos_per_firm)}, max={max(combos_per_firm)}")
 
-        combos_per_firm = [len(AiSi[firm]) for firm in range(n)]
-        print(f"  Supplier combos per firm: min={min(combos_per_firm)}, max={max(combos_per_firm)}")
+    # Pre-generate trial states (same across all max_swaps values)
+    trial_configs = []
+    for trial in range(n_trials):
+        if same_initial_network:
+            perm_seed = 1000 + trial
+            trial_configs.append(('base', perm_seed))
+        else:
+            init_seed = 2000 + trial
+            perm_seed = 999
+            trial_configs.append((init_seed, perm_seed))
 
-        # Run trials
-        print(f"\n  Running {n_trials} trials...")
-        print(f"  {'-' * 66}")
+    # Run all max_swaps x trials
+    # results_by_ms[ms_val] = list of result dicts
+    results_by_ms = {}
+
+    for ms in swap_values:
+        print(f"\n{'─' * 70}")
+        print(f"  max_swaps = {ms}")
+        print(f"{'─' * 70}")
 
         results = []
-        for trial in range(n_trials):
-            if same_initial_network:
+        for trial, (state_key, perm_seed) in enumerate(trial_configs):
+            if state_key == 'base':
                 trial_state = base_state
-                perm_seed = 1000 + trial
             else:
-                init_seed = 2000 + trial
-                trial_state = generate_random_initial_network(n, Wbar, AiSi, seed=init_seed)
-                perm_seed = 999
+                trial_state = generate_random_initial_network(n, Wbar, AiSi, seed=state_key)
 
-            result = run_full_simulation(trial_state, a, b, z, seed=perm_seed,
-                                         max_swaps=max_swaps)
-            results.append(result)
+            if sim_mode == "aa":
+                res = run_aa_simulation(trial_state, a, seed=perm_seed, max_swaps=ms,
+                                        b=b, z=z)
+            else:
+                res = run_full_simulation(trial_state, a, b, z, seed=perm_seed, max_swaps=ms)
 
-            conv_tag = "CONV" if result['converged'] else "NO_CONV"
-            rel_u = ((result['final_utility'] - result['initial_utility'])
-                     / abs(result['initial_utility'])
-                     if abs(result['initial_utility']) > 1e-12 else float('nan'))
-            print(f"    trial {trial:2d}  {conv_tag:8s}  rounds={result['rounds']:2d}  "
-                  f"U0={result['initial_utility']:+.4f}  Uf={result['final_utility']:+.4f}  "
-                  f"dU/|U0|={rel_u:+.6f}")
+            results.append(res)
 
-        # Summary stats for this b value
-        n_converged = sum(1 for r in results if r['converged'])
-        n_not_conv = n_trials - n_converged
-        rounds_conv = [r['rounds'] for r in results if r['converged']]
-        rounds_all = [r['rounds'] for r in results]
-        rel_changes = [
-            (r['final_utility'] - r['initial_utility']) / abs(r['initial_utility'])
-            for r in results if abs(r['initial_utility']) > 1e-12
+            if show_comparison:
+                final_hash = hash(tuple(tuple(sorted(s)) for s in res['final_supplier_list']))
+                print(f"  Trial {trial + 1:2d}: rounds={res['rounds']:2d}, "
+                      f"utility={res['final_utility']:.6f}, "
+                      f"hash={final_hash % 10000:04d}")
+
+        results_by_ms[ms] = results
+
+    # =========================================================================
+    # DIVERSITY ANALYSIS
+    # =========================================================================
+    print("\n" + "=" * 70)
+    print("DIVERSITY ANALYSIS")
+    print("=" * 70)
+
+    for ms in swap_values:
+        results = results_by_ms[ms]
+        utilities = np.array([r['final_utility'] for r in results])
+
+        # Count distinct equilibria by supplier hash
+        hashes = [
+            hash(tuple(tuple(sorted(s)) for s in r['final_supplier_list']))
+            for r in results
         ]
+        unique_hashes = set(hashes)
+        n_distinct = len(unique_hashes)
 
-        print(f"\n  SUMMARY for b={b_val}:")
-        print(f"    Converged     : {n_converged}/{n_trials}")
-        print(f"    Not converged : {n_not_conv}/{n_trials}")
-        if rounds_conv:
-            print(f"    Rounds (conv) : {np.mean(rounds_conv):.1f} +/- {np.std(rounds_conv):.1f}")
-        print(f"    Rounds (all)  : {np.mean(rounds_all):.1f} +/- {np.std(rounds_all):.1f}")
-        if rel_changes:
-            print(f"    dU/|U0|       : {np.mean(rel_changes):+.6f} +/- {np.std(rel_changes):.6f}")
+        # Pairwise max price differences
+        pairwise_diffs = []
+        for i, j in combinations(range(len(results)), 2):
+            diff = np.max(np.abs(results[i]['final_prices'] - results[j]['final_prices']))
+            pairwise_diffs.append(diff)
+        pairwise_diffs = np.array(pairwise_diffs)
 
-        # Check uniqueness of final equilibrium (among converged trials)
-        converged_results = [r for r in results if r['converged']]
-        if len(converged_results) >= 2:
-            ref_prices = converged_results[0]['final_prices']
-            ref_suppliers = converged_results[0]['final_supplier_list']
-            prices_match = True
-            suppliers_match = True
-            max_price_diff = 0
-            for res in converged_results[1:]:
-                pdiff = np.max(np.abs(res['final_prices'] - ref_prices))
-                max_price_diff = max(max_price_diff, pdiff)
-                if pdiff > 1e-8:
-                    prices_match = False
-                for firm in range(n):
-                    if sorted(res['final_supplier_list'][firm]) != sorted(ref_suppliers[firm]):
-                        suppliers_match = False
-            uniq = "UNIQUE" if (prices_match and suppliers_match) else "MULTIPLE"
-            print(f"    Equilibrium   : {uniq} (max price diff={max_price_diff:.2e})")
+        print(f"\n  max_swaps = {ms}:")
+        print(f"    Distinct equilibria:  {n_distinct} / {n_trials}")
+        print(f"    Utility:  mean={utilities.mean():.6f}, std={utilities.std():.6f}, "
+              f"range=[{utilities.min():.6f}, {utilities.max():.6f}]")
+        if len(pairwise_diffs) > 0:
+            print(f"    Pairwise max|Δp|:  mean={pairwise_diffs.mean():.2e}, "
+                  f"max={pairwise_diffs.max():.2e}, "
+                  f"fraction_identical={np.mean(pairwise_diffs < 1e-10):.1%}")
 
-        summary_table.append({
-            'b': b_val,
-            'converged': n_converged,
-            'not_converged': n_not_conv,
-            'mean_rounds': np.mean(rounds_all),
-            'mean_dU': np.mean(rel_changes) if rel_changes else float('nan'),
-        })
+    # Cross-comparison: for each trial, does higher max_swaps improve utility?
+    if len(swap_values) >= 2:
+        print(f"\n{'─' * 70}")
+        print("CROSS-COMPARISON (per trial, across max_swaps values)")
+        print(f"{'─' * 70}")
 
-    # Final comparison table
-    print(f"\n{'=' * 72}")
-    print("COMPARISON TABLE")
-    print(f"{'=' * 72}")
-    print(f"  {'b':>5s}  {'conv':>5s}  {'no_conv':>7s}  {'rounds':>8s}  {'dU/|U0|':>12s}")
-    print(f"  {'-' * 5}  {'-' * 5}  {'-' * 7}  {'-' * 8}  {'-' * 12}")
-    for row in summary_table:
-        print(f"  {row['b']:5.2f}  {row['converged']:5d}  {row['not_converged']:7d}  "
-              f"{row['mean_rounds']:8.1f}  {row['mean_dU']:+12.6f}")
-    print(f"{'=' * 72}")
+        ms_min, ms_max = min(swap_values), max(swap_values)
+        res_lo = results_by_ms[ms_min]
+        res_hi = results_by_ms[ms_max]
+
+        n_better = 0
+        n_same = 0
+        n_worse = 0
+        util_diffs = []
+
+        for trial in range(n_trials):
+            u_lo = res_lo[trial]['final_utility']
+            u_hi = res_hi[trial]['final_utility']
+            diff = u_hi - u_lo
+            util_diffs.append(diff)
+
+            sup_match = all(
+                sorted(res_lo[trial]['final_supplier_list'][f]) ==
+                sorted(res_hi[trial]['final_supplier_list'][f])
+                for f in range(n)
+            )
+
+            if sup_match:
+                n_same += 1
+            elif diff > EPSILON:
+                n_better += 1
+            else:
+                n_worse += 1
+
+        util_diffs = np.array(util_diffs)
+        print(f"\n  ms={ms_max} vs ms={ms_min} (per trial, same starting network):")
+        print(f"    Same equilibrium:     {n_same:3d} / {n_trials}")
+        print(f"    ms={ms_max} strictly better: {n_better:3d} / {n_trials}")
+        print(f"    ms={ms_max} strictly worse:  {n_worse:3d} / {n_trials}")
+        print(f"    Utility diff (ms={ms_max} - ms={ms_min}): "
+              f"mean={util_diffs.mean():+.6f}, std={util_diffs.std():.6f}")
+
+    return results_by_ms
+
+
+# =============================================================================
+# CONFIG PARSING UTILITY
+# =============================================================================
+
+def parse_config_arg(s):
+    """Parse a config string like 'homogeneous:0.5' or 'uniform:0.5:1.5' into a dict."""
+    parts = s.split(':')
+    mode = parts[0]
+    if mode == 'homogeneous':
+        return {'mode': 'homogeneous', 'value': float(parts[1])}
+    elif mode == 'uniform':
+        return {'mode': 'uniform', 'min': float(parts[1]), 'max': float(parts[2])}
+    else:
+        raise ValueError(f"Unknown config mode: {mode}")
+
+
+def config_label(cfg):
+    """Short label for a config dict, for display in sweep tables."""
+    if cfg['mode'] == 'homogeneous':
+        return f"{cfg['value']}"
+    elif cfg['mode'] == 'uniform':
+        return f"U({cfg['min']},{cfg['max']})"
+    return str(cfg)
+
+
+# =============================================================================
+# SWEEP MODE
+# =============================================================================
+
+def run_sweep(sim_mode="aa", n_trials=10, network_seed=42, show_comparison=False):
+    """
+    Sweep over parameter combinations and report convergence + uniqueness.
+
+    Tests all combos of:
+    - b: 0.9, 1.0, 1.1, uniform(0.8, 1.2)
+    - cc: 1, 2, 3, 4
+    - max_swaps: 1, 2
+
+    For each combo, runs n_trials from different starting networks
+    (different_start_same_parameter) and reports:
+    - Whether all trials converged
+    - Number of distinct equilibria
+    - Utility spread
+
+    Args:
+        sim_mode: "aa" or "full"
+        n_trials: Number of trials per combo
+        network_seed: Base seed for Wbar/AiSi generation
+        show_comparison: Show per-trial detail for mismatches
+    """
+    b_configs = [
+        {'mode': 'homogeneous', 'value': 0.9},
+        {'mode': 'homogeneous', 'value': 1.0},
+        {'mode': 'homogeneous', 'value': 1.1},
+        {'mode': 'uniform', 'min': 0.8, 'max': 1.2},
+    ]
+    cc_values = [1, 2, 3, 4]
+    max_swaps_values = [1, 2]
+
+    total_combos = len(b_configs) * len(cc_values) * len(max_swaps_values)
+
+    print("=" * 90)
+    print(f"SWEEP — {sim_mode.upper()} mode")
+    print(f"Trials per combo: {n_trials}, Base seed: {network_seed}")
+    print(f"Total combos: {total_combos}")
+    print("=" * 90)
+
+    # Header
+    print(f"\n{'b':>12s}  {'cc':>3s}  {'ms':>3s}  "
+          f"{'conv':>5s}  {'distinct':>8s}  "
+          f"{'util_mean':>12s}  {'util_std':>10s}  {'max_Δp':>10s}  {'result':>10s}")
+    print("-" * 90)
+
+    results_table = []
+    combo_num = 0
+
+    for b_cfg in b_configs:
+        for cc in cc_values:
+            for ms in max_swaps_values:
+                combo_num += 1
+                b_label = config_label(b_cfg)
+
+                result = run_convergence_test(
+                    sim_mode=sim_mode,
+                    test_mode="different_start_same_parameter",
+                    n_trials=n_trials,
+                    network_seed=network_seed,
+                    cc=cc,
+                    show_comparison=show_comparison,
+                    max_swaps=ms,
+                    b_config=b_cfg,
+                    quiet=True,
+                )
+
+                u = result['utilities']
+                tag = "UNIQUE" if result['all_match'] else f"{result['n_distinct']} eq."
+                if not result['all_converged']:
+                    tag = f"!CONV({result['n_converged']}/{n_trials})"
+
+                print(f"{b_label:>12s}  {cc:3d}  {ms:3d}  "
+                      f"{result['n_converged']:3d}/{n_trials:<2d}  "
+                      f"{result['n_distinct']:5d}/{n_trials:<2d}  "
+                      f"{u.mean():12.6f}  {u.std():10.6f}  "
+                      f"{result['max_price_diff']:10.2e}  {tag:>10s}")
+
+                results_table.append({
+                    'b': b_label,
+                    'cc': cc,
+                    'max_swaps': ms,
+                    **result,
+                })
+
+    # Summary
+    print("\n" + "=" * 90)
+    print("SUMMARY")
+    print("=" * 90)
+
+    n_unique = sum(1 for r in results_table if r['all_match'])
+    n_conv = sum(1 for r in results_table if r['all_converged'])
+    n_multi = sum(1 for r in results_table if r['all_converged'] and not r['all_match'])
+
+    print(f"Total combos:          {total_combos}")
+    print(f"All trials converged:  {n_conv}")
+    print(f"Unique equilibrium:    {n_unique}")
+    print(f"Multiple equilibria:   {n_multi}")
+    print(f"Convergence failures:  {total_combos - n_conv}")
+
+    return results_table
 
 
 # =============================================================================
@@ -802,26 +1054,30 @@ if __name__ == "__main__":
     sim_mode = SIM_MODE
     test_mode = TEST_MODE
     compare_modes = COMPARE_MODES
+    compare_swaps = COMPARE_SWAPS
+    sweep = False
     cc = CC
     n_trials = N_TRIALS
     network_seed = NETWORK_SEED
     show_comparison = SHOW_COMPARISON
     max_swaps = MAX_SWAPS
-    b_sweep_mode = True  # Default: run b-sweep study
+    swap_values = None  # default [1, 2]; override with --swap_values=1,2,3
+    b_config = None
+    a_config = None
+    z_config = None
 
     # Command line overrides
     for arg in sys.argv[1:]:
         if arg == "--aa":
             sim_mode = "aa"
-            b_sweep_mode = False
         elif arg == "--full":
             sim_mode = "full"
-            b_sweep_mode = False
         elif arg == "--compare":
             compare_modes = True
-            b_sweep_mode = False
-        elif arg == "--b_sweep":
-            b_sweep_mode = True
+        elif arg == "--compare_swaps":
+            compare_swaps = True
+        elif arg == "--sweep":
+            sweep = True
         elif arg == "--same_start_different_order":
             test_mode = "same_start_different_order"
         elif arg == "--different_start_same_parameter":
@@ -836,18 +1092,36 @@ if __name__ == "__main__":
             show_comparison = True
         elif arg.startswith("--max_swaps="):
             max_swaps = int(arg.split("=")[1])
+        elif arg.startswith("--swap_values="):
+            swap_values = [int(v) for v in arg.split("=")[1].split(",")]
+        elif arg.startswith("--b_config="):
+            b_config = parse_config_arg(arg.split("=", 1)[1])
+        elif arg.startswith("--a_config="):
+            a_config = parse_config_arg(arg.split("=", 1)[1])
+        elif arg.startswith("--z_config="):
+            z_config = parse_config_arg(arg.split("=", 1)[1])
 
-    if b_sweep_mode:
-        run_b_sweep(
-            b_values=B_VALUES,
+    if sweep:
+        run_sweep(
+            sim_mode=sim_mode,
+            n_trials=n_trials,
+            network_seed=network_seed,
+            show_comparison=show_comparison,
+        )
+        exit(0)
+    elif compare_swaps:
+        run_compare_swaps(
+            sim_mode=sim_mode,
             test_mode=test_mode,
             n_trials=n_trials,
             network_seed=network_seed,
             cc=cc,
-            max_swaps=max_swaps,
+            show_comparison=show_comparison,
+            swap_values=swap_values,
         )
+        exit(0)
     elif compare_modes:
-        success = run_compare_test(
+        result = run_compare_test(
             test_mode=test_mode,
             n_trials=n_trials,
             network_seed=network_seed,
@@ -855,9 +1129,9 @@ if __name__ == "__main__":
             show_comparison=show_comparison,
             max_swaps=max_swaps,
         )
-        exit(0 if success else 1)
+        exit(0 if result else 1)
     else:
-        success = run_convergence_test(
+        result = run_convergence_test(
             sim_mode=sim_mode,
             test_mode=test_mode,
             n_trials=n_trials,
@@ -865,5 +1139,8 @@ if __name__ == "__main__":
             cc=cc,
             show_comparison=show_comparison,
             max_swaps=max_swaps,
+            b_config=b_config,
+            a_config=a_config,
+            z_config=z_config,
         )
-        exit(0 if success else 1)
+        exit(0 if result['all_match'] else 1)
