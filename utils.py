@@ -371,3 +371,54 @@ def calculate_utility(eq: dict) -> float:
     """Calculate utility as negative sum of positive prices."""
     prices = eq['P']
     return -np.sum(prices[prices > 0])
+
+
+# =============================================================================
+# PARTIAL EQUILIBRIUM (LIMITED ANTICIPATION)
+# =============================================================================
+
+def identify_firms_within_tier_np(M: np.ndarray, id_firm: int, tier: int) -> list:
+    """BFS of depth `tier` from id_firm on undirected adjacency (M | M.T).
+
+    Returns sorted list of firm indices within tier hops (including id_firm).
+    Matches igraph's neighborhood(..., mode='all') behaviour.
+    """
+    n = M.shape[0]
+    if tier <= 0:
+        return [int(id_firm)]
+    adj = (M != 0) | (M.T != 0)
+    visited = np.zeros(n, dtype=bool)
+    visited[id_firm] = True
+    frontier = [int(id_firm)]
+    for _ in range(int(tier)):
+        next_frontier = []
+        for u in frontier:
+            neighbors = np.where(adj[u] & ~visited)[0]
+            for v in neighbors:
+                visited[v] = True
+                next_frontier.append(int(v))
+        if not next_frontier:
+            break
+        frontier = next_frontier
+    return sorted(int(i) for i in np.where(visited)[0])
+
+
+def compute_partial_equilibrium_cost(a: np.ndarray, b: np.ndarray,
+                                     adjusted_z: np.ndarray, W: np.ndarray,
+                                     firms_within_tiers: list,
+                                     id_rewiring_firm: int) -> float:
+    """Solve equilibrium on the subgraph induced by firms_within_tiers and
+    return the price of id_rewiring_firm under that partial equilibrium.
+
+    The subgraph keeps only intra-neighborhood links — flows from/to firms
+    outside the neighborhood are dropped.
+    """
+    idx = list(firms_within_tiers)
+    W_sub = W[np.ix_(idx, idx)]
+    a_sub = a[idx]
+    b_sub = b[idx]
+    z_sub = adjusted_z[idx]
+    n_sub = len(idx)
+    partial_eq = compute_equilibrium_full(a_sub, b_sub, z_sub, W_sub, n_sub)
+    firm_id_reduced = idx.index(int(id_rewiring_firm))
+    return float(partial_eq['P'][firm_id_reduced])

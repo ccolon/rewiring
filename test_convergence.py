@@ -54,6 +54,8 @@ from utils import (
     compute_equilibrium_full,
     build_W_from_suppliers,
     calculate_utility,
+    identify_firms_within_tier_np,
+    compute_partial_equilibrium_cost,
 )
 
 
@@ -67,10 +69,10 @@ COMPARE_MODES = False  # If True, compare AA vs Full instead of running single m
 COMPARE_SWAPS = False  # If True, compare max_swaps=1 vs max_swaps=2 on same network(s)
 
 # Shared parameters
-NB_FIRMS = 50
+NB_FIRMS = 100
 NB_ROUNDS = 20
 C = 4
-CC = 1
+CC = 4
 AISI_SPREAD = 0.1
 MAX_SWAPS = 1  # max number of simultaneous supplier swaps (1 = single, 2 = up to dual)
 
@@ -550,6 +552,197 @@ def run_full_simulation(network_state, a, b, z, seed=None, max_swaps=1, nb_round
         'final_prices': eq['P'],
         'final_supplier_list': supplier_id_list,
     }
+
+
+# =============================================================================
+# UNIFIED ASYNC SIMULATION (aa / full / limited)
+# =============================================================================
+
+def _edges_from_suppliers(supplier_id_list):
+    """Return (K, 2) int32 array of (supplier, buyer) pairs, lexicographically sorted."""
+    pairs = [(int(s), int(buyer))
+             for buyer, suppliers in enumerate(supplier_id_list)
+             for s in suppliers]
+    pairs.sort()
+    return np.asarray(pairs, dtype=np.int32)
+
+
+def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
+                           max_swaps=1, nb_rounds=None, tier=None, trace=False):
+    """Unified asynchronous rewiring simulation.
+
+    Common structure for all three anticipation modes:
+    - Round = one permutation pass over firms.
+    - Each firm evaluates all combinations up to max_swaps against its current
+      supplier set, using a mode-specific cost function.
+    - If the best candidate strictly reduces the (mode-specific) cost, the swap
+      is applied IMMEDIATELY, the true GE is recomputed, and the next firm in
+      the permutation sees the updated state.
+    - Convergence: no swaps during a full round.
+
+    Mode differs only in evaluate_candidate_cost:
+    - 'aa': ratchet / closed-form — prod(P^((1-a_i)*W_col')) / test_z
+            where P is the current equilibrium price vector.
+    - 'full': solve compute_equilibrium_full on the hypothetical W (current W
+              with firm i's column replaced); take the i-th price.
+    - 'limited': identify firms within tier[i] hops on the hypothetical W's
+                 adjacency; solve partial equilibrium on that subgraph; take
+                 the i-th price.
+
+    Args:
+        network_state: dict from generate_base_network.
+        a, b, z: economic parameter arrays of length n.
+        mode: 'aa', 'full', or 'limited'.
+        seed: random seed for permutation order.
+        max_swaps: max simultaneous supplier swaps (1=single, 2=up to dual).
+        nb_rounds: number of rounds (defaults to module-level NB_ROUNDS).
+        tier: int or np.ndarray of length n. Required for mode='limited'.
+              If int, broadcast to all firms.
+        trace: if True, collect per-round scalars and edge snapshots and attach
+               them to the result dict as result['trace'] = {
+                   'scalars': list[dict],  # one entry per round-end, keys t, rewirings, sum_p, max_swap_binding
+                   'edges':   list[np.ndarray],  # length rounds+1, each (N*mean_cc, 2) int32
+                   'converged_at': int or None,
+               }
+    """
+    if mode not in ("aa", "full", "limited"):
+        raise ValueError(f"Unknown mode: {mode!r}. Use 'aa', 'full', or 'limited'.")
+    if mode == "limited" and tier is None:
+        raise ValueError("tier must be provided for mode='limited'.")
+
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+
+    n = len(network_state['AiSi'])
+    Wbar = network_state['Wbar']
+    AiSi = network_state['AiSi']
+    supplier_id_list = [list(s) for s in network_state['supplier_id_list']]
+    alternate_supplier_id_list = [list(s) for s in network_state['alternate_supplier_id_list']]
+    W = network_state['W0'].copy()
+
+    # Broadcast tier if scalar
+    if mode == "limited":
+        tier_arr = np.full(n, int(tier)) if np.isscalar(tier) else np.asarray(tier, dtype=int)
+
+    # Initial equilibrium
+    adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
+    eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+    initial_utility = calculate_utility(eq)
+
+    one_minus_a = 1 - a
+
+    def candidate_cost(id_firm, candidate_set):
+        """Cost of id_firm if its supplier set were `candidate_set`, under mode."""
+        # Hypothetical column for this firm
+        W_col = np.zeros(n)
+        for s in candidate_set:
+            W_col[s] = Wbar[s, id_firm]
+        test_z = AiSi[id_firm][tuple(sorted(int(s) for s in candidate_set))]
+
+        if mode == "aa":
+            return float(np.prod(np.power(eq['P'], one_minus_a[id_firm] * W_col)) / test_z)
+
+        # For full and limited: build W_test = current W with firm i's column replaced
+        W_test = W.copy()
+        W_test[:, id_firm] = W_col
+
+        # Build tmp supplier list and adjusted z for the hypothetical network
+        tmp_supplier_list = [list(s) for s in supplier_id_list]
+        tmp_supplier_list[id_firm] = sorted(int(s) for s in candidate_set)
+        tmp_adjusted_z = compute_adjusted_z(AiSi, tmp_supplier_list, z)
+
+        if mode == "full":
+            new_eq = compute_equilibrium_full(a, b, tmp_adjusted_z, W_test, n)
+            return float(new_eq['P'][id_firm])
+
+        # mode == "limited": neighborhood on the HYPOTHETICAL graph
+        M_test = (W_test != 0).astype(np.int8)
+        firms_within_tiers = identify_firms_within_tier_np(M_test, id_firm, tier_arr[id_firm])
+        return compute_partial_equilibrium_cost(a, b, tmp_adjusted_z, W_test,
+                                                firms_within_tiers, id_firm)
+
+    _nb_rounds = nb_rounds if nb_rounds is not None else NB_ROUNDS
+
+    if trace:
+        trace_scalars = [{
+            't': 0,
+            'rewirings': 0,
+            'sum_p': float(eq['P'].sum()),
+            'max_swap_binding': False,
+        }]
+        trace_edges = [_edges_from_suppliers(supplier_id_list)]
+        converged_at = None
+
+    rewirings_this_round = 0
+    for r in range(1, _nb_rounds + 1):
+        rewirings_this_round = 0
+        max_swap_binding = False
+
+        for id_firm in np.random.permutation(n):
+            current_set = set(supplier_id_list[id_firm])
+            alternates = alternate_supplier_id_list[id_firm]
+
+            current_cost = candidate_cost(id_firm, current_set)
+            potential_cost = current_cost
+            best_removes, best_adds = None, None
+
+            for swap_size in range(1, max_swaps + 1):
+                if len(alternates) < swap_size or len(current_set) < swap_size:
+                    continue
+                for new_sups in combinations(alternates, swap_size):
+                    for old_sups in combinations(current_set, swap_size):
+                        new_set = (current_set - set(old_sups)) | set(new_sups)
+                        cost = candidate_cost(id_firm, new_set)
+                        if cost < potential_cost - EPSILON:
+                            potential_cost = cost
+                            best_removes, best_adds = list(old_sups), list(new_sups)
+
+            if best_adds is not None:
+                for old_s, new_s in zip(best_removes, best_adds):
+                    supplier_id_list[id_firm].remove(old_s)
+                    supplier_id_list[id_firm].append(new_s)
+                    alternate_supplier_id_list[id_firm].remove(new_s)
+                    alternate_supplier_id_list[id_firm].append(old_s)
+                supplier_id_list[id_firm].sort()
+
+                W = build_W_from_suppliers(supplier_id_list, Wbar)
+                adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
+                eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+                rewirings_this_round += len(best_adds)
+                if len(best_adds) == max_swaps:
+                    max_swap_binding = True
+
+        if trace:
+            trace_scalars.append({
+                't': r,
+                'rewirings': int(rewirings_this_round),
+                'sum_p': float(eq['P'].sum()),
+                'max_swap_binding': bool(max_swap_binding),
+            })
+            trace_edges.append(_edges_from_suppliers(supplier_id_list))
+
+        if rewirings_this_round == 0:
+            if trace:
+                converged_at = r
+            break
+
+    result = {
+        'converged': rewirings_this_round == 0,
+        'rounds': r,
+        'initial_utility': initial_utility,
+        'final_utility': calculate_utility(eq),
+        'final_prices': eq['P'],
+        'final_supplier_list': supplier_id_list,
+        'mode': mode,
+    }
+    if trace:
+        result['trace'] = {
+            'scalars': trace_scalars,
+            'edges': trace_edges,
+            'converged_at': converged_at,
+        }
+    return result
 
 
 # =============================================================================
