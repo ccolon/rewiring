@@ -61,7 +61,7 @@ from utils import (
 # TEST CONFIGURATION (modify here to run without command line)
 # =============================================================================
 
-SIM_MODE = "aa"  # "aa" or "full"
+SIM_MODE = "async_aa"  # "aa" or "full"
 TEST_MODE = "different_start_same_parameter"  # "same_start_different_order" or "different_start_same_parameter"
 COMPARE_MODES = False  # If True, compare AA vs Full instead of running single mode
 COMPARE_SWAPS = False  # If True, compare max_swaps=1 vs max_swaps=2 on same network(s)
@@ -78,8 +78,8 @@ MAX_SWAPS = 1  # max number of simultaneous supplier swaps (1 = single, 2 = up t
 A_VALUE = 0.5  # homogeneous labor share for AA mode
 
 # Full mode parameters (can be homogeneous or heterogeneous)
-# B_CONFIG = {'mode': 'homogeneous', 'value': 1.1}
-B_CONFIG = {'mode': 'uniform', 'min': 0.5, "max": 1.5}
+B_CONFIG = {'mode': 'homogeneous', 'value': 0.9}
+# B_CONFIG = {'mode': 'uniform', 'min': 0.5, "max": 1.5}
 A_CONFIG = {'mode': 'homogeneous', 'value': 0.5}
 Z_CONFIG = {'mode': 'homogeneous', 'value': 1.0}
 # Z_CONFIG = {'mode': 'uniform', 'min': 0.5, "max": 1.5}
@@ -324,6 +324,136 @@ def run_aa_simulation(network_state, a, seed=None, max_swaps=1, nb_rounds=None,
 
 
 # =============================================================================
+# ASYNC AA MODE SIMULATION
+# =============================================================================
+
+def run_async_aa_simulation(network_state, a, seed=None, max_swaps=1, nb_rounds=None,
+                            b=None, z=None):
+    """Run AA mode simulation with ASYNCHRONOUS (Gauss-Seidel) updates.
+
+    Same cost formula as run_aa_simulation:
+        cost = prod(P_ref^((1-a)*W_col)) / z_i
+
+    but the swap is applied immediately after each firm decides, and the true
+    equilibrium is recomputed right away. The next firm in the permutation uses
+    the updated P_ref. Convergence criterion: no rewirings during a full round.
+
+    Args:
+        network_state: Network state dict from generate_base_network.
+        a: Labor share (scalar for CRS, array for non-CRS).
+        seed: Random seed for permutation order.
+        max_swaps: Maximum number of simultaneous supplier swaps.
+        nb_rounds: Number of rounds (defaults to module-level NB_ROUNDS).
+        b: Returns to scale array (None for CRS mode).
+        z: Base productivity array (None for CRS mode).
+    """
+    crs_mode = b is None
+
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+
+    n = len(network_state['AiSi'])
+    Wbar = network_state['Wbar']
+    AiSi = network_state['AiSi']
+    supplier_id_list = [list(s) for s in network_state['supplier_id_list']]
+    alternate_supplier_id_list = [list(s) for s in network_state['alternate_supplier_id_list']]
+    W = network_state['W0'].copy()
+
+    # Initial equilibrium
+    if crs_mode:
+        adjusted_z = compute_adjusted_z(AiSi, supplier_id_list)
+        eq = compute_equilibrium_crs(a, adjusted_z, W, n)
+        initial_utility = -eq['P'].sum()
+    else:
+        adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
+        eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+        initial_utility = calculate_utility(eq)
+
+    P_ref = eq['P'].copy()
+
+    if crs_mode:
+        one_minus_a = (1 - a)
+    else:
+        one_minus_a = (1 - a)
+
+    _nb_rounds = nb_rounds if nb_rounds is not None else NB_ROUNDS
+    rewirings_this_round = 0
+    for r in range(1, _nb_rounds + 1):
+        rewirings_this_round = 0
+
+        for id_firm in np.random.permutation(n):
+            oma = one_minus_a if crs_mode else one_minus_a[id_firm]
+
+            current_W_col = np.zeros(n)
+            for s in supplier_id_list[id_firm]:
+                current_W_col[s] = Wbar[s, id_firm]
+            current_z = AiSi[id_firm][tuple(int(s) for s in sorted(supplier_id_list[id_firm]))]
+            current_cost = np.prod(np.power(P_ref, oma * current_W_col)) / current_z
+            potential_cost = current_cost
+            best_removes, best_adds = None, None
+
+            current_set = set(supplier_id_list[id_firm])
+            alternates = alternate_supplier_id_list[id_firm]
+
+            for swap_size in range(1, max_swaps + 1):
+                if len(alternates) < swap_size or len(supplier_id_list[id_firm]) < swap_size:
+                    continue
+                for new_sups in combinations(alternates, swap_size):
+                    for old_sups in combinations(supplier_id_list[id_firm], swap_size):
+                        new_set = (current_set - set(old_sups)) | set(new_sups)
+                        W_col = np.zeros(n)
+                        for s in new_set:
+                            W_col[s] = Wbar[s, id_firm]
+                        test_z = AiSi[id_firm][tuple(sorted(int(s) for s in new_set))]
+                        cost = np.prod(np.power(P_ref, oma * W_col)) / test_z
+
+                        if cost < potential_cost - EPSILON:
+                            potential_cost = cost
+                            best_removes, best_adds = list(old_sups), list(new_sups)
+
+            if best_adds is not None:
+                for old_s, new_s in zip(best_removes, best_adds):
+                    supplier_id_list[id_firm].remove(old_s)
+                    supplier_id_list[id_firm].append(new_s)
+                    alternate_supplier_id_list[id_firm].remove(new_s)
+                    alternate_supplier_id_list[id_firm].append(old_s)
+                supplier_id_list[id_firm].sort()
+
+                W = build_W_from_suppliers(supplier_id_list, Wbar)
+
+                if crs_mode:
+                    adjusted_z = compute_adjusted_z(AiSi, supplier_id_list)
+                    eq = compute_equilibrium_crs(a, adjusted_z, W, n)
+                else:
+                    adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
+                    eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+
+                P_ref = eq['P'].copy()
+                rewirings_this_round += len(best_adds)
+
+        if rewirings_this_round == 0:
+            break
+
+    if crs_mode:
+        final_z = compute_adjusted_z(AiSi, supplier_id_list)
+        final_eq = compute_equilibrium_crs(a, final_z, W, n)
+        final_utility = -final_eq['P'].sum()
+    else:
+        final_eq = eq
+        final_utility = calculate_utility(final_eq)
+
+    return {
+        'converged': rewirings_this_round == 0,
+        'rounds': r,
+        'initial_utility': initial_utility,
+        'final_utility': final_utility,
+        'final_prices': final_eq['P'],
+        'final_supplier_list': supplier_id_list,
+    }
+
+
+# =============================================================================
 # FULL MODE SIMULATION
 # =============================================================================
 
@@ -514,6 +644,9 @@ def run_convergence_test(sim_mode="aa", test_mode="same_start_different_order",
         if sim_mode == "aa":
             result = run_aa_simulation(trial_state, a, seed=perm_seed, max_swaps=max_swaps,
                                        b=b, z=z)
+        elif sim_mode == "async_aa":
+            result = run_async_aa_simulation(trial_state, a, seed=perm_seed, max_swaps=max_swaps,
+                                             b=b, z=z)
         else:
             result = run_full_simulation(trial_state, a, b, z, seed=perm_seed, max_swaps=max_swaps)
 
@@ -820,6 +953,9 @@ def run_compare_swaps(sim_mode="full", test_mode="different_start_same_parameter
             if sim_mode == "aa":
                 res = run_aa_simulation(trial_state, a, seed=perm_seed, max_swaps=ms,
                                         b=b, z=z)
+            elif sim_mode == "async_aa":
+                res = run_async_aa_simulation(trial_state, a, seed=perm_seed, max_swaps=ms,
+                                              b=b, z=z)
             else:
                 res = run_full_simulation(trial_state, a, b, z, seed=perm_seed, max_swaps=ms)
 
@@ -1070,6 +1206,8 @@ if __name__ == "__main__":
     for arg in sys.argv[1:]:
         if arg == "--aa":
             sim_mode = "aa"
+        elif arg == "--async_aa":
+            sim_mode = "async_aa"
         elif arg == "--full":
             sim_mode = "full"
         elif arg == "--compare":
