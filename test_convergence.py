@@ -672,14 +672,19 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
             'max_swap_binding': False,
         }]
         trace_edges = [_edges_from_suppliers(supplier_id_list)]
+        trace_prices = [eq['P'].copy()]
+        trace_price_steps = [0]
+        trace_rewire_events = []
         converged_at = None
 
+    t = 0
     rewirings_this_round = 0
     for r in range(1, _nb_rounds + 1):
         rewirings_this_round = 0
         max_swap_binding = False
 
         for id_firm in np.random.permutation(n):
+            t += 1
             current_set = set(supplier_id_list[id_firm])
             alternates = alternate_supplier_id_list[id_firm]
 
@@ -712,6 +717,10 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
                 rewirings_this_round += len(best_adds)
                 if len(best_adds) == max_swaps:
                     max_swap_binding = True
+                if trace:
+                    trace_rewire_events.append({'t': t, 'round': r, 'firm': int(id_firm)})
+                    trace_prices.append(eq['P'].copy())
+                    trace_price_steps.append(t)
 
         if trace:
             trace_scalars.append({
@@ -727,6 +736,13 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
                 converged_at = r
             break
 
+    if trace:
+        # Anchor the last observation at the final step so the price trajectory
+        # does not visually end at the last rewire but extends to t_final.
+        if not trace_price_steps or trace_price_steps[-1] != t:
+            trace_prices.append(eq['P'].copy())
+            trace_price_steps.append(t)
+
     result = {
         'converged': rewirings_this_round == 0,
         'rounds': r,
@@ -740,6 +756,9 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         result['trace'] = {
             'scalars': trace_scalars,
             'edges': trace_edges,
+            'prices': trace_prices,
+            'price_steps': trace_price_steps,
+            'rewire_events': trace_rewire_events,
             'converged_at': converged_at,
         }
     return result
