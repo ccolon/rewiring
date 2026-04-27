@@ -403,15 +403,16 @@ def identify_firms_within_tier_np(M: np.ndarray, id_firm: int, tier: int) -> lis
     return sorted(int(i) for i in np.where(visited)[0])
 
 
-def compute_partial_equilibrium_cost(a: np.ndarray, b: np.ndarray,
-                                     adjusted_z: np.ndarray, W: np.ndarray,
-                                     firms_within_tiers: list,
-                                     id_rewiring_firm: int) -> float:
-    """Solve equilibrium on the subgraph induced by firms_within_tiers and
-    return the price of id_rewiring_firm under that partial equilibrium.
+def compute_partial_equilibrium_cost_naive(a: np.ndarray, b: np.ndarray,
+                                           adjusted_z: np.ndarray, W: np.ndarray,
+                                           firms_within_tiers: list,
+                                           id_rewiring_firm: int) -> float:
+    """Naive partial equilibrium: drop all links between in-tier firms and the
+    rest of the network and re-solve `compute_equilibrium_full` on the island.
 
-    The subgraph keeps only intra-neighborhood links — flows from/to firms
-    outside the neighborhood are dropped.
+    This is the legacy behaviour from `functions.py:compute_partial_equilibrium_and_cost`.
+    It does not match the boundary-conditioned partial equilibrium described in
+    the manuscript -- for that, use `compute_partial_equilibrium_cost`.
     """
     idx = list(firms_within_tiers)
     W_sub = W[np.ix_(idx, idx)]
@@ -422,3 +423,91 @@ def compute_partial_equilibrium_cost(a: np.ndarray, b: np.ndarray,
     partial_eq = compute_equilibrium_full(a_sub, b_sub, z_sub, W_sub, n_sub)
     firm_id_reduced = idx.index(int(id_rewiring_firm))
     return float(partial_eq['P'][firm_id_reduced])
+
+
+def compute_partial_equilibrium_cost(a: np.ndarray, b: np.ndarray,
+                                     adjusted_z_test: np.ndarray,
+                                     W_full: np.ndarray, W_test: np.ndarray,
+                                     eq_current: dict,
+                                     firms_within_tiers: list,
+                                     id_rewiring_firm: int,
+                                     n_full: int) -> float:
+    """Boundary-conditioned partial equilibrium per the manuscript.
+
+    In-tier firms re-equilibrate jointly under the candidate W; outside-firm
+    intermediate demand and supplier prices are held fixed at their current
+    values (boundary terms phi and psi).
+
+    Algebraic match: at tier >= diameter, recovers `compute_equilibrium_full`.
+    Under CRS (b_i=1) and column sums of W = 1 (alpha_i=1), at tier=0 the
+    formula collapses to the AA closed-form
+        K^AA_i = prod_j P_{j,t}^{(1-a_i) w_{ji}^{(r)}} / z_i^{(r)}.
+
+    Args:
+        a, b: full-network parameter arrays of length n_full (constant across swap).
+        adjusted_z_test: AiSi-adjusted z reflecting the candidate supplier set.
+        W_full: current input-output matrix (pre-swap).
+        W_test: candidate input-output matrix (post-swap), differs from W_full
+                only in the rewiring firm's column.
+        eq_current: GE result under (a, b, current adjusted_z, W_full); must
+                    contain at least 'P' and 'X' arrays of length n_full.
+        firms_within_tiers: indices of firms in the tier neighborhood
+                            (must include id_rewiring_firm).
+        id_rewiring_firm: index of the firm evaluating the swap.
+        n_full: total number of firms in the full network.
+
+    Returns:
+        Anticipated price of id_rewiring_firm under the candidate W_test,
+        with boundary held fixed at the current equilibrium.
+    """
+    idx = list(firms_within_tiers)
+    n_in = len(idx)
+    a_in = a[idx]
+    b_in = b[idx]
+    z_in_test = adjusted_z_test[idx]
+
+    # Full alpha vectors (depend on column sums; differ between current and candidate
+    # only at the rewiring firm's column when its column sum changes)
+    alpha_full = a + (1 - a) * W_full.sum(axis=0)
+    alpha_test = a + (1 - a) * W_test.sum(axis=0)
+    alpha_in = alpha_test[idx]
+
+    # Current GE state (held-fixed boundary)
+    P_cur = eq_current['P']
+    V_cur = eq_current['X'] * eq_current['P']  # nominal sales per firm
+    log_P_cur = np.log(P_cur)
+
+    # ------------------------------------------------------------------
+    # Sales block: V_in = Wtilde_test_in @ V_in + (1 + phi)
+    # where Wtilde[k,j] = (1 - a_j) / alpha_j * W[k,j]
+    # and phi[k] = sum_{j not in T} Wtilde_full[k,j] V_cur[j]
+    # computed by subtraction: phi = (V_cur[k] - 1) - in-tier-only-cur-contribution[k]
+    # ------------------------------------------------------------------
+    Wtilde_full_in = W_full[np.ix_(idx, idx)] * ((1 - a_in) / alpha_full[idx])[np.newaxis, :]
+    Wtilde_test_in = W_test[np.ix_(idx, idx)] * ((1 - a_in) / alpha_in)[np.newaxis, :]
+
+    in_tier_contribution_cur = Wtilde_full_in @ V_cur[idx]
+    phi = V_cur[idx] - 1.0 - in_tier_contribution_cur
+
+    V_in = np.linalg.solve(np.eye(n_in) - Wtilde_test_in, 1.0 + phi)
+
+    # ------------------------------------------------------------------
+    # Price block: log P_in = (b*(1-a))_in W_test_in.T @ log P_in + Omega + log_psi
+    # log_psi[k] = sum_{j not in T} b_k(1-a_k) W_test[j,k] log P_cur[j]
+    # computed by subtraction
+    # ------------------------------------------------------------------
+    factor_row = b_in * (1 - a_in)  # shape (n_in,)
+
+    log_factor_total = factor_row * (W_test[:, idx].T @ log_P_cur)        # all suppliers
+    log_factor_in_tier = factor_row * (W_test[np.ix_(idx, idx)].T @ log_P_cur[idx])
+    log_psi = log_factor_total - log_factor_in_tier
+
+    Omega = (-np.log(z_in_test)
+             + b_in * alpha_in * np.log(alpha_in)
+             + (1 - b_in * alpha_in) * np.log(V_in))
+
+    A = np.eye(n_in) - factor_row[:, np.newaxis] * W_test[np.ix_(idx, idx)].T
+    log_P_in = np.linalg.solve(A, Omega + log_psi)
+
+    firm_id_reduced = idx.index(int(id_rewiring_firm))
+    return float(np.exp(log_P_in[firm_id_reduced]))

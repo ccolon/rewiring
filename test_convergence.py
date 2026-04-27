@@ -56,6 +56,7 @@ from utils import (
     calculate_utility,
     identify_firms_within_tier_np,
     compute_partial_equilibrium_cost,
+    compute_partial_equilibrium_cost_naive,
 )
 
 
@@ -592,11 +593,12 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
     Args:
         network_state: dict from generate_base_network.
         a, b, z: economic parameter arrays of length n.
-        mode: 'aa', 'full', or 'limited'.
+        mode: 'aa', 'full', 'limited' (boundary-corrected partial equilibrium),
+              or 'naive_limited' (legacy: drop links to outside firms).
         seed: random seed for permutation order.
         max_swaps: max simultaneous supplier swaps (1=single, 2=up to dual).
         nb_rounds: number of rounds (defaults to module-level NB_ROUNDS).
-        tier: int or np.ndarray of length n. Required for mode='limited'.
+        tier: int or np.ndarray of length n. Required for 'limited' / 'naive_limited'.
               If int, broadcast to all firms.
         trace: if True, collect per-round scalars and edge snapshots and attach
                them to the result dict as result['trace'] = {
@@ -605,10 +607,12 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
                    'converged_at': int or None,
                }
     """
-    if mode not in ("aa", "full", "limited"):
-        raise ValueError(f"Unknown mode: {mode!r}. Use 'aa', 'full', or 'limited'.")
-    if mode == "limited" and tier is None:
-        raise ValueError("tier must be provided for mode='limited'.")
+    if mode not in ("aa", "full", "limited", "naive_limited"):
+        raise ValueError(
+            f"Unknown mode: {mode!r}. Use 'aa', 'full', 'limited', or 'naive_limited'."
+        )
+    if mode in ("limited", "naive_limited") and tier is None:
+        raise ValueError(f"tier must be provided for mode={mode!r}.")
 
     if seed is not None:
         random.seed(seed)
@@ -622,7 +626,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
     W = network_state['W0'].copy()
 
     # Broadcast tier if scalar
-    if mode == "limited":
+    if mode in ("limited", "naive_limited"):
         tier_arr = np.full(n, int(tier)) if np.isscalar(tier) else np.asarray(tier, dtype=int)
 
     # Initial equilibrium
@@ -643,7 +647,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         if mode == "aa":
             return float(np.prod(np.power(eq['P'], one_minus_a[id_firm] * W_col)) / test_z)
 
-        # For full and limited: build W_test = current W with firm i's column replaced
+        # For full and limited variants: build W_test = current W with firm i's column replaced
         W_test = W.copy()
         W_test[:, id_firm] = W_col
 
@@ -656,11 +660,21 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
             new_eq = compute_equilibrium_full(a, b, tmp_adjusted_z, W_test, n)
             return float(new_eq['P'][id_firm])
 
-        # mode == "limited": neighborhood on the HYPOTHETICAL graph
+        # tier neighborhood on the HYPOTHETICAL graph (used by both limited variants)
         M_test = (W_test != 0).astype(np.int8)
         firms_within_tiers = identify_firms_within_tier_np(M_test, id_firm, tier_arr[id_firm])
-        return compute_partial_equilibrium_cost(a, b, tmp_adjusted_z, W_test,
-                                                firms_within_tiers, id_firm)
+
+        if mode == "limited":
+            # Boundary-corrected partial equilibrium (manuscript spec)
+            return compute_partial_equilibrium_cost(
+                a, b, tmp_adjusted_z, W, W_test, eq,
+                firms_within_tiers, id_firm, n,
+            )
+
+        # mode == "naive_limited": drop links to outside, solve on the island only
+        return compute_partial_equilibrium_cost_naive(
+            a, b, tmp_adjusted_z, W_test, firms_within_tiers, id_firm,
+        )
 
     _nb_rounds = nb_rounds if nb_rounds is not None else NB_ROUNDS
 
