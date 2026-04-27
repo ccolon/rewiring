@@ -96,6 +96,11 @@ def compute_diversity(final_supplier_lists):
 
 CSV_FIELDNAMES = [
     'n', 'tech_idx', 'series', 'diversity',
+    # Convergence diagnostics: trials may hit nb_rounds without reaching a fixed
+    # point. frac_converged < 1 or max_rounds == nb_rounds flags potentially
+    # transient (truncated) runs whose `final_supplier_list` is not a true
+    # equilibrium and may inflate `diversity`.
+    'frac_converged', 'mean_rounds', 'max_rounds',
     'c', 'cc', 'aisi_spread', 'sigma_w', 'max_swaps', 'nb_rounds', 'n_trials',
     'a_config', 'b_config', 'z_config',
     'base_seed', 'tech_seed',
@@ -192,7 +197,7 @@ def run_study():
             # ------------------------------------------------------------------
             if blue_key not in existing_keys:
                 t0 = time.time()
-                final_lists = []
+                final_lists, rounds_list, conv_list = [], [], []
                 for trial in range(N_TRIALS):
                     result = run_unified_simulation(
                         base_state, a, b, z, mode="full",
@@ -201,13 +206,20 @@ def run_study():
                         nb_rounds=NB_ROUNDS,
                     )
                     final_lists.append(result['final_supplier_list'])
+                    rounds_list.append(int(result['rounds']))
+                    conv_list.append(bool(result['converged']))
 
                 diversity = compute_diversity(final_lists)
-                append_row(OUTPUT_FILE, {**common, 'series': 'same_tech_same_init', 'diversity': diversity})
+                row = {**common, 'series': 'same_tech_same_init', 'diversity': diversity,
+                       'frac_converged': float(np.mean(conv_list)),
+                       'mean_rounds':    float(np.mean(rounds_list)),
+                       'max_rounds':     int(np.max(rounds_list))}
+                append_row(OUTPUT_FILE, row)
                 done += 1
                 elapsed = time.time() - t0
                 print(f"[{done:5d}/{total}] n={n:2d} tech={tech_idx:2d} same_tech_same_init  "
-                      f"diversity={diversity:.3f}  ({elapsed:.1f}s)")
+                      f"diversity={diversity:.3f}  conv={row['frac_converged']:.2f}  "
+                      f"rounds={row['mean_rounds']:.1f}/{row['max_rounds']}  ({elapsed:.1f}s)")
 
             # ------------------------------------------------------------------
             # same_tech_dif_init — different initial networks, different permutation orders
@@ -217,7 +229,7 @@ def run_study():
             # ------------------------------------------------------------------
             if red_key not in existing_keys:
                 t0 = time.time()
-                final_lists = []
+                final_lists, rounds_list, conv_list = [], [], []
                 for trial in range(N_TRIALS):
                     trial_state = generate_random_initial_network(
                         n, Wbar, AiSi, seed=seed_off + 2000 + trial,
@@ -229,13 +241,20 @@ def run_study():
                         nb_rounds=NB_ROUNDS,
                     )
                     final_lists.append(result['final_supplier_list'])
+                    rounds_list.append(int(result['rounds']))
+                    conv_list.append(bool(result['converged']))
 
                 diversity = compute_diversity(final_lists)
-                append_row(OUTPUT_FILE, {**common, 'series': 'same_tech_dif_init', 'diversity': diversity})
+                row = {**common, 'series': 'same_tech_dif_init', 'diversity': diversity,
+                       'frac_converged': float(np.mean(conv_list)),
+                       'mean_rounds':    float(np.mean(rounds_list)),
+                       'max_rounds':     int(np.max(rounds_list))}
+                append_row(OUTPUT_FILE, row)
                 done += 1
                 elapsed = time.time() - t0
                 print(f"[{done:5d}/{total}] n={n:2d} tech={tech_idx:2d} same_tech_dif_init  "
-                      f"diversity={diversity:.3f}  ({elapsed:.1f}s)")
+                      f"diversity={diversity:.3f}  conv={row['frac_converged']:.2f}  "
+                      f"rounds={row['mean_rounds']:.1f}/{row['max_rounds']}  ({elapsed:.1f}s)")
 
     print("=" * 70)
     print(f"Done. Results saved to {OUTPUT_FILE}")
