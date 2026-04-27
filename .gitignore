@@ -1,7 +1,10 @@
 # Specific
-output
-sweeps
-figures
+output/
+sweeps/
+figures/
+results/
+tmp_*/
+*.png
 
 # Created by .ignore support plugin (hsz.mobi)
 ### Python template

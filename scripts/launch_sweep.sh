@@ -55,7 +55,7 @@ for n in 100; do
         --job-name=${job_name} \
         --output=${SLURM_LOG_DIR}/${job_name}.%j.out \
         --wrap=\"bash -c 'source /projects/disruptsc/miniforge3/bin/activate ${PYTHON_ENV} && \
-python ${SCRIPT_DIR}/diversity_study.py \
+python ${SCRIPT_DIR}/scripts/diversity_study.py \
     --n_min ${n} --n_max ${n} \
     --b_config ${b_config} \
     --a_config ${a_config} \

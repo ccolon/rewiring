@@ -27,16 +27,17 @@ import csv
 import json
 import os
 import random
+import sys
 import time
 
 import numpy as np
 
-from test_convergence import (
-    generate_base_network,
-    generate_random_initial_network,
-    run_full_simulation,
-)
-from utils import generate_parameter, generate_a_parameter
+# Allow `python scripts/diversity_study.py` from the repo root
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
+
+from rewiring.networks import generate_base_network, generate_random_initial_network
+from rewiring.parameters import generate_a_parameter, generate_parameter
+from rewiring.simulation import run_unified_simulation
 
 
 # =============================================================================
@@ -193,8 +194,8 @@ def run_study():
                 t0 = time.time()
                 final_lists = []
                 for trial in range(N_TRIALS):
-                    result = run_full_simulation(
-                        base_state, a, b, z,
+                    result = run_unified_simulation(
+                        base_state, a, b, z, mode="full",
                         seed=seed_off + 1000 + trial,
                         max_swaps=MAX_SWAPS,
                         nb_rounds=NB_ROUNDS,
@@ -221,8 +222,8 @@ def run_study():
                     trial_state = generate_random_initial_network(
                         n, Wbar, AiSi, seed=seed_off + 2000 + trial,
                     )
-                    result = run_full_simulation(
-                        trial_state, a, b, z,
+                    result = run_unified_simulation(
+                        trial_state, a, b, z, mode="full",
                         seed=seed_off + 3000 + trial,
                         max_swaps=MAX_SWAPS,
                         nb_rounds=NB_ROUNDS,

@@ -10,14 +10,19 @@ figure per run.
 """
 import os
 import random
+import sys
 
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import networkx as nx
 import numpy as np
 
-from test_convergence import generate_base_network, run_unified_simulation
-from utils import generate_a_parameter, generate_parameter
+# Allow `python scripts/plot_aa_3panel.py` from the repo root
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
+
+from rewiring.networks import generate_base_network
+from rewiring.parameters import generate_a_parameter, generate_parameter
+from rewiring.simulation import run_unified_simulation
 
 
 # ---- run config --------------------------------------------------------------
@@ -148,7 +153,9 @@ def make_figure(result, title_suffix, out_path):
 
 
 def main():
-    out_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    out_dir = os.path.join(repo_root, "results", "figures")
+    os.makedirs(out_dir, exist_ok=True)
     for b_value, title, fname in B_CASES:
         result = run_one(b_value)
         make_figure(result, f"AA, max_swaps={MAX_SWAPS}, {title}",

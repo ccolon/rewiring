@@ -18,19 +18,20 @@ Three sanity checks, each on a small random economy:
 Run:
     python test_partial_equilibrium.py
 """
+import os
 import random
+import sys
 
 import numpy as np
 
-from test_convergence import generate_base_network
-from utils import (
-    EPSILON,
-    build_W_from_suppliers,
-    compute_adjusted_z,
-    compute_equilibrium_full,
+# Allow `python tests/test_partial_equilibrium.py` from the repo root
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
+
+from rewiring.equilibrium import compute_adjusted_z, compute_equilibrium_full
+from rewiring.networks import build_W_from_suppliers, generate_base_network
+from rewiring.parameters import EPSILON, generate_a_parameter, generate_parameter
+from rewiring.partial_eq import (
     compute_partial_equilibrium_cost,
-    generate_a_parameter,
-    generate_parameter,
     identify_firms_within_tier_np,
 )
 

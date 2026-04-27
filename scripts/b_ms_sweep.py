@@ -24,12 +24,12 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from test_convergence import (
-    generate_base_network,
-    generate_random_initial_network,
-    run_unified_simulation,
-)
-from utils import generate_parameter, generate_a_parameter
+# Allow `python scripts/b_ms_sweep.py` from the repo root
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
+
+from rewiring.networks import generate_base_network, generate_random_initial_network
+from rewiring.parameters import generate_a_parameter, generate_parameter
+from rewiring.simulation import run_unified_simulation
 
 
 # =============================================================================
