@@ -44,6 +44,15 @@ def _edges_from_suppliers(supplier_id_list):
     return np.asarray(pairs, dtype=np.int32)
 
 
+def _state_signature(supplier_id_list):
+    """Hashable canonical signature of the supplier-set configuration.
+
+    Two states with the same active suppliers per firm produce equal signatures
+    regardless of the order in which the suppliers were appended to each list.
+    """
+    return tuple(tuple(sorted(int(x) for x in s)) for s in supplier_id_list)
+
+
 # =============================================================================
 # UNIFIED ASYNC SIMULATION (aa / full / limited / naive_limited)
 # =============================================================================
@@ -160,6 +169,15 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         trace_rewire_events = []
         converged_at = None
 
+    # Cycle detection: track per-round canonical state signatures so we can
+    # recognise period-2 limit cycles (state_t == state_{t-2} and
+    # state_{t-1} == state_{t-3}). cycle_period:
+    #   1    -> strict convergence (no rewires in a full round)
+    #   2    -> period-2 limit cycle
+    #   None -> hit nb_rounds budget without either
+    state_history = [_state_signature(supplier_id_list)]
+    cycle_period = None
+
     t = 0
     rewirings_this_round = 0
     for r in range(1, _nb_rounds + 1):
@@ -214,7 +232,21 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
             })
             trace_edges.append(_edges_from_suppliers(supplier_id_list))
 
+        # Strict convergence: no rewires this round.
         if rewirings_this_round == 0:
+            cycle_period = 1
+            if trace:
+                converged_at = r
+            break
+
+        # Period-2 limit cycle: current state matches 2 rounds ago, and the
+        # previous round matched 3 rounds ago. Two matching pairs guard against
+        # a coincidental single-round equality.
+        state_history.append(_state_signature(supplier_id_list))
+        if (len(state_history) >= 4
+                and state_history[-1] == state_history[-3]
+                and state_history[-2] == state_history[-4]):
+            cycle_period = 2
             if trace:
                 converged_at = r
             break
@@ -227,7 +259,11 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
             trace_price_steps.append(t)
 
     result = {
-        'converged': rewirings_this_round == 0,
+        # `converged` keeps its strict meaning (period-1 only) for backward
+        # compat with existing post-processors. Use `cycle_period` to also
+        # distinguish "limit cycle" from "budget exhausted".
+        'converged': cycle_period == 1,
+        'cycle_period': cycle_period,
         'rounds': r,
         'initial_utility': initial_utility,
         'final_utility': calculate_utility(eq),
