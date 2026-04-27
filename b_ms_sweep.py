@@ -62,7 +62,7 @@ def build_cells(cc):
     Each cell has a name, a `b_config` (passed to generate_parameter),
     and a concrete max_swaps integer.
     """
-    ms_low, ms_full = max(1, cc - 1), cc
+    ms_low, ms_full = 2, cc
     b_regimes = [
         ("DRS", {"mode": "homogeneous", "value": 0.9}),
         ("CRS", {"mode": "homogeneous", "value": 1.0}),

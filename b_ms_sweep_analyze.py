@@ -281,7 +281,7 @@ def render_figure(bundle, out_path_prefix, left_metric="rewirings"):
         if row == 0:
             ax.set_title(COL_TITLES[b_label], fontsize=10)
         if col == 0:
-            ax.set_ylabel(f"max_swaps = c_i{'-1' if ms_label=='low' else ''}\n"
+            ax.set_ylabel(f"max_swaps = {'2' if ms_label=='low' else '4'}\n"
                           f"{left_ylabel}", fontsize=9)
         if row == 1:
             ax.set_xlabel("round t")
@@ -303,8 +303,8 @@ def render_figure(bundle, out_path_prefix, left_metric="rewirings"):
                bbox_to_anchor=(0.5, -0.03), frameon=False, fontsize=9)
 
     fig.suptitle(
-        f"Small-multiples of AA simulation traces "
-        f"(N={cfg['N']}, cc={cfg['cc']}, S={cfg['seeds']} seeds)",
+        f"AA simulation time series "
+        f"(n={cfg['N']}, cc={cfg['cc']}, S={cfg['seeds']} seeds)",
         fontsize=11,
     )
 
