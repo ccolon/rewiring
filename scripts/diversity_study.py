@@ -96,11 +96,15 @@ def compute_diversity(final_supplier_lists):
 
 CSV_FIELDNAMES = [
     'n', 'tech_idx', 'series', 'diversity',
-    # Convergence diagnostics: trials may hit nb_rounds without reaching a fixed
-    # point. frac_converged < 1 or max_rounds == nb_rounds flags potentially
-    # transient (truncated) runs whose `final_supplier_list` is not a true
-    # equilibrium and may inflate `diversity`.
-    'frac_converged', 'mean_rounds', 'max_rounds',
+    # Convergence diagnostics. A trial can exit one of three ways:
+    #   - rewirings == 0 in a full round  -> period-1, counted in `frac_converged`
+    #   - period-2 limit cycle detected   -> counted in `frac_cycled`
+    #   - hit nb_rounds without either    -> truncated; not in either fraction
+    # Truncated trials' `final_supplier_list` is not a true equilibrium and may
+    # inflate `diversity`. Trustworthy cells satisfy
+    #     frac_converged + frac_cycled >= 1 - epsilon
+    # and `max_rounds < nb_rounds`.
+    'frac_converged', 'frac_cycled', 'mean_rounds', 'max_rounds',
     'c', 'cc', 'aisi_spread', 'sigma_w', 'max_swaps', 'nb_rounds', 'n_trials',
     'a_config', 'b_config', 'z_config',
     'base_seed', 'tech_seed',
@@ -197,7 +201,7 @@ def run_study():
             # ------------------------------------------------------------------
             if blue_key not in existing_keys:
                 t0 = time.time()
-                final_lists, rounds_list, conv_list = [], [], []
+                final_lists, rounds_list, conv_list, cycle_list = [], [], [], []
                 for trial in range(N_TRIALS):
                     result = run_unified_simulation(
                         base_state, a, b, z, mode="full",
@@ -208,10 +212,12 @@ def run_study():
                     final_lists.append(result['final_supplier_list'])
                     rounds_list.append(int(result['rounds']))
                     conv_list.append(bool(result['converged']))
+                    cycle_list.append(result.get('cycle_period') == 2)
 
                 diversity = compute_diversity(final_lists)
                 row = {**common, 'series': 'same_tech_same_init', 'diversity': diversity,
                        'frac_converged': float(np.mean(conv_list)),
+                       'frac_cycled':    float(np.mean(cycle_list)),
                        'mean_rounds':    float(np.mean(rounds_list)),
                        'max_rounds':     int(np.max(rounds_list))}
                 append_row(OUTPUT_FILE, row)
@@ -219,6 +225,7 @@ def run_study():
                 elapsed = time.time() - t0
                 print(f"[{done:5d}/{total}] n={n:2d} tech={tech_idx:2d} same_tech_same_init  "
                       f"diversity={diversity:.3f}  conv={row['frac_converged']:.2f}  "
+                      f"cyc={row['frac_cycled']:.2f}  "
                       f"rounds={row['mean_rounds']:.1f}/{row['max_rounds']}  ({elapsed:.1f}s)")
 
             # ------------------------------------------------------------------
@@ -229,7 +236,7 @@ def run_study():
             # ------------------------------------------------------------------
             if red_key not in existing_keys:
                 t0 = time.time()
-                final_lists, rounds_list, conv_list = [], [], []
+                final_lists, rounds_list, conv_list, cycle_list = [], [], [], []
                 for trial in range(N_TRIALS):
                     trial_state = generate_random_initial_network(
                         n, Wbar, AiSi, seed=seed_off + 2000 + trial,
@@ -243,10 +250,12 @@ def run_study():
                     final_lists.append(result['final_supplier_list'])
                     rounds_list.append(int(result['rounds']))
                     conv_list.append(bool(result['converged']))
+                    cycle_list.append(result.get('cycle_period') == 2)
 
                 diversity = compute_diversity(final_lists)
                 row = {**common, 'series': 'same_tech_dif_init', 'diversity': diversity,
                        'frac_converged': float(np.mean(conv_list)),
+                       'frac_cycled':    float(np.mean(cycle_list)),
                        'mean_rounds':    float(np.mean(rounds_list)),
                        'max_rounds':     int(np.max(rounds_list))}
                 append_row(OUTPUT_FILE, row)
@@ -254,6 +263,7 @@ def run_study():
                 elapsed = time.time() - t0
                 print(f"[{done:5d}/{total}] n={n:2d} tech={tech_idx:2d} same_tech_dif_init  "
                       f"diversity={diversity:.3f}  conv={row['frac_converged']:.2f}  "
+                      f"cyc={row['frac_cycled']:.2f}  "
                       f"rounds={row['mean_rounds']:.1f}/{row['max_rounds']}  ({elapsed:.1f}s)")
 
     print("=" * 70)
