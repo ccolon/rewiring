@@ -87,7 +87,7 @@ def _detect_period(state_history, max_period=MAX_CYCLE_PERIOD):
 # =============================================================================
 
 def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
-                           max_swaps=1, nb_rounds=None, tier=None, trace=False):
+                           max_swaps=1, nb_rounds=None, tier=None, trace=False, console_print=False):
     """Unified asynchronous rewiring simulation.
 
     Common structure for all anticipation modes:
@@ -263,6 +263,14 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
                 'max_swap_binding': bool(max_swap_binding),
             })
             trace_edges.append(_edges_from_suppliers(supplier_id_list))
+
+        if console_print:
+            info = {
+                'round': r,
+                'rewirings': int(rewirings_this_round),
+                'sum_p': float(eq['P'].sum())
+            }
+            print(info)
 
         # Strict convergence: no rewires this round.
         if rewirings_this_round == 0:
