@@ -179,6 +179,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
     cycle_period = None
 
     t = 0
+    total_rewirings = 0
     rewirings_this_round = 0
     for r in range(1, _nb_rounds + 1):
         rewirings_this_round = 0
@@ -216,6 +217,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
                 adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
                 eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
                 rewirings_this_round += len(best_adds)
+                total_rewirings += len(best_adds)
                 if len(best_adds) == max_swaps:
                     max_swap_binding = True
                 if trace:
@@ -265,6 +267,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         'converged': cycle_period == 1,
         'cycle_period': cycle_period,
         'rounds': r,
+        'total_rewirings': int(total_rewirings),
         'initial_utility': initial_utility,
         'final_utility': calculate_utility(eq),
         'final_prices': eq['P'],

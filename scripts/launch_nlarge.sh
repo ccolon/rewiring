@@ -1,16 +1,25 @@
 #!/bin/bash
 #
+# RE-RUN of launch_nlarge.sh after simulation.py was patched to expose
+# `total_rewirings` and diversity_study.py to record `mean_swaps_per_firm`
+# / `max_swaps_per_firm` per cell.
+#
+# Same operating points, same sample budget. Fresh BASE_SEED block (default
+# 500) so new CSVs don't collide with the previous aisiOnset_* / swResidue_*
+# files. Tag prefixes get a `_swaps` suffix to keep them distinguishable on
+# disk and in post-processing.
+#
 # Round-3 follow-up: n-scan ("size effects") at two complementary operating
 # points. Both at ms=1 (realistic single-swap), uniform a/b/z (the same mild
 # heterogeneity used in the original n=100 main sweep). 1-D scans over n.
 #
-#   A) aisi-trap onset (cc=4, ms=1, aisi=0.005, sigma_w=0)
-#      Diversity at n=100 is ~0.38 (dif) / ~0.11 (same) -- transitional in
-#      both series, so growth or decline with n is visible without ceiling
-#      effects. Probes whether the trap saturation threshold shifts with n.
+#   A) aisi-trap onset (ms=1, aisi=0.005, sigma_w=0), at cc in {2, 4}
+#      cc=4 is the original Block A; cc=2 added to compare action-set sizes.
+#      Diversity at cc=4, n=100 is ~0.38 (dif) / ~0.11 (same) -- transitional;
+#      cc=2 saturation behaviour with n is unknown a priori.
 #
-#   B) sigma_w residue (cc=4, ms=1, aisi=0, sigma_w=0.10)
-#      Diversity at n=100 is ~0.41 (dif) / ~0.36 (same) -- intermediate.
+#   B) sigma_w residue (ms=1, aisi=0, sigma_w=0.10), at cc in {2, 4}
+#      cc=4 is the original Block B; cc=2 added to compare action-set sizes.
 #      Probes the link-noise-driven multiplicity in the action-restricted
 #      regime, complementary to Goal 4c at ms=4.
 #
@@ -36,7 +45,7 @@ PYTHON_ENV="/projects/disruptsc/miniforge3/envs/rewiring"
 OUTPUT_DIR="${SCRIPT_DIR}/results_sweep"
 SLURM_LOG_DIR="${SCRIPT_DIR}/slurm_logs"
 
-BASE_SEED_START=${1:-400}
+BASE_SEED_START=${1:-500}
 DRY_RUN=false
 [[ "$2" == "--dry-run" ]] && DRY_RUN=true
 
@@ -120,16 +129,20 @@ scan_over_n() {
 }
 
 # =============================================================================
-# A) aisi-trap onset n-scan
+# A) aisi-trap onset n-scan, at cc=2 and cc=4
 # =============================================================================
-echo "=== Block A: n-scan at (cc=4, ms=1, aisi=0.005, sigma_w=0, uniform a/b/z) ==="
-scan_over_n 4 1 0.005 0.0 "aisiOnset"
+echo "=== Block A (cc=4): n-scan at (cc=4, ms=1, aisi=0.005, sigma_w=0, uniform a/b/z) ==="
+scan_over_n 4 1 0.005 0.0 "aisiOnset_swaps_cc4"
+echo "=== Block A (cc=2): n-scan at (cc=2, ms=1, aisi=0.005, sigma_w=0, uniform a/b/z) ==="
+scan_over_n 2 1 0.005 0.0 "aisiOnset_swaps_cc2"
 
 # =============================================================================
-# B) sigma_w residue n-scan
+# B) sigma_w residue n-scan, at cc=2 and cc=4
 # =============================================================================
-echo "=== Block B: n-scan at (cc=4, ms=1, aisi=0, sigma_w=0.10, uniform a/b/z) ==="
-scan_over_n 4 1 0.0 0.1 "swResidue"
+echo "=== Block B (cc=4): n-scan at (cc=4, ms=1, aisi=0, sigma_w=0.10, uniform a/b/z) ==="
+scan_over_n 4 1 0.0 0.1 "swResidue_swaps_cc4"
+echo "=== Block B (cc=2): n-scan at (cc=2, ms=1, aisi=0, sigma_w=0.10, uniform a/b/z) ==="
+scan_over_n 2 1 0.0 0.1 "swResidue_swaps_cc2"
 
 echo
 echo "Done: $count jobs queued (BASE_SEED in [${BASE_SEED_START}, $((BASE_SEED_START + 9))], time=${TIME_LIMIT})"
