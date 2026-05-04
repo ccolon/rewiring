@@ -10,8 +10,8 @@ from scripts.visibility_study import build_tier_array
 SEED = 42
 
 # Economic parameters (the n=100 main-sweep operating point)
-N, C, CC = 50, 4, 4
-tier_mean, tier_std = 1, 1
+N, C, CC = 100, 4, 4
+tier_mean, tier_std = 1, 0
 random.seed(SEED); np.random.seed(SEED)
 tier_rng = np.random.default_rng(100)
 # b = generate_parameter({"mode": "uniform", "min": 0.9, "max": 1.1}, N, "b", verbose=False)
@@ -28,7 +28,7 @@ state = generate_base_network(N, C, CC, aisi_spread=0, seed=SEED, a=a, b=b, sigm
 # Run
 result = run_unified_simulation(
     state, a, b, z,
-    mode="limited",
+    mode="full",
     seed=SEED,
     max_swaps=1,
     nb_rounds=50,
