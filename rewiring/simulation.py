@@ -34,6 +34,11 @@ from .partial_eq import (
 # Default round budget; callers should normally pass an explicit `nb_rounds`.
 NB_ROUNDS = 20
 
+# Largest cycle period the detector will recognise. Trials that enter a
+# longer cycle (or wander chaotically) classify as `cycle_period = None`,
+# i.e. truncated when the round budget is exhausted.
+MAX_CYCLE_PERIOD = 10
+
 
 def _edges_from_suppliers(supplier_id_list):
     """Return (K, 2) int32 array of (supplier, buyer) pairs, lexicographically sorted."""
@@ -51,6 +56,30 @@ def _state_signature(supplier_id_list):
     regardless of the order in which the suppliers were appended to each list.
     """
     return tuple(tuple(sorted(int(x) for x in s)) for s in supplier_id_list)
+
+
+def _detect_period(state_history, max_period=MAX_CYCLE_PERIOD):
+    """Return the smallest k in [2, max_period] such that the last 2k entries
+    of `state_history` form a period-k cycle (k consecutive equalities), else
+    None.
+
+    A period-k cycle requires the last k states to match the k states before
+    them position-by-position -- this guards against an accidental single-state
+    coincidence and keeps the false-positive rate of the detector low for
+    realistic max_period.
+    """
+    L = len(state_history)
+    for k in range(2, max_period + 1):
+        if L < 2 * k:
+            continue
+        match = True
+        for i in range(k):
+            if state_history[L - 1 - i] != state_history[L - 1 - k - i]:
+                match = False
+                break
+        if match:
+            return k
+    return None
 
 
 # =============================================================================
@@ -170,11 +199,12 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         converged_at = None
 
     # Cycle detection: track per-round canonical state signatures so we can
-    # recognise period-2 limit cycles (state_t == state_{t-2} and
-    # state_{t-1} == state_{t-3}). cycle_period:
+    # recognise period-k limit cycles (k in [2, MAX_CYCLE_PERIOD]).
+    # cycle_period:
     #   1    -> strict convergence (no rewires in a full round)
-    #   2    -> period-2 limit cycle
-    #   None -> hit nb_rounds budget without either
+    #   2..k -> period-k limit cycle
+    #   None -> hit nb_rounds budget without either (truncated / chaotic /
+    #           cycle of period > MAX_CYCLE_PERIOD)
     state_history = [_state_signature(supplier_id_list)]
     cycle_period = None
 
@@ -241,14 +271,11 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
                 converged_at = r
             break
 
-        # Period-2 limit cycle: current state matches 2 rounds ago, and the
-        # previous round matched 3 rounds ago. Two matching pairs guard against
-        # a coincidental single-round equality.
+        # Period-k limit cycle (k in [2, MAX_CYCLE_PERIOD]).
         state_history.append(_state_signature(supplier_id_list))
-        if (len(state_history) >= 4
-                and state_history[-1] == state_history[-3]
-                and state_history[-2] == state_history[-4]):
-            cycle_period = 2
+        detected = _detect_period(state_history, max_period=MAX_CYCLE_PERIOD)
+        if detected is not None:
+            cycle_period = detected
             if trace:
                 converged_at = r
             break

@@ -60,9 +60,35 @@ A_CONFIG = {'mode': 'homogeneous', 'value': 0.5}
 B_CONFIG = {'mode': 'homogeneous', 'value': 0.9}
 Z_CONFIG = {'mode': 'homogeneous', 'value': 1.0}
 
+# Anticipation mode: "full" (default; original n=100 main sweep) or "limited"
+# (boundary-conditioned partial-equilibrium evaluation, requires tier params).
+MODE = "full"
+TIER_MEAN = 0.0    # used only when MODE == "limited"; when TIER_STD == 0 the
+TIER_STD  = 0.0    # tier_arr is constant = round(TIER_MEAN); else lognormal.
+
 BASE_SEED = 0  # Monte Carlo offset; different values -> independent RNG streams
 
 OUTPUT_FILE = "diversity_results.csv"
+
+
+def _build_tier_array(n, tier_mean, tier_std, rng):
+    """Return an int array of length n with the per-firm tier visibility.
+
+    - If tier_std <= 0, returns a constant array = round(tier_mean).
+    - Else, draws lognormal values whose target mean and std equal the given
+      tier_mean and tier_std, then rounds to nearest non-negative integer.
+    """
+    if tier_std <= 0:
+        return np.full(n, int(round(tier_mean)), dtype=int)
+    # lognormal with desired mean mu and std sigma:
+    # underlying normal has variance log(1 + (sigma/mu)**2) and mean
+    # log(mu) - var/2 (assumes mu > 0).
+    if tier_mean <= 0:
+        return np.zeros(n, dtype=int)
+    var_n = np.log(1.0 + (tier_std / tier_mean) ** 2)
+    mean_n = np.log(tier_mean) - 0.5 * var_n
+    draws = rng.lognormal(mean=mean_n, sigma=np.sqrt(var_n), size=n)
+    return np.clip(np.round(draws), 0, None).astype(int)
 
 
 # =============================================================================
@@ -97,20 +123,27 @@ def compute_diversity(final_supplier_lists):
 CSV_FIELDNAMES = [
     'n', 'tech_idx', 'series', 'diversity',
     # Convergence diagnostics. A trial can exit one of three ways:
-    #   - rewirings == 0 in a full round  -> period-1, counted in `frac_converged`
-    #   - period-2 limit cycle detected   -> counted in `frac_cycled`
-    #   - hit nb_rounds without either    -> truncated; not in either fraction
-    # Truncated trials' `final_supplier_list` is not a true equilibrium and may
-    # inflate `diversity`. Trustworthy cells satisfy
+    #   - rewirings == 0 in a full round   -> period-1, counted in `frac_converged`
+    #   - period-k limit cycle (k in 2..MAX_CYCLE_PERIOD) -> counted in `frac_cycled`
+    #   - hit nb_rounds without either     -> truncated; not in either fraction
+    # `mean_cycle_period` is the average detected period over the cycling trials
+    # (NaN if no trial cycled).
+    # Trustworthy cells satisfy
     #     frac_converged + frac_cycled >= 1 - epsilon
     # and `max_rounds < nb_rounds`.
-    'frac_converged', 'frac_cycled', 'mean_rounds', 'max_rounds',
+    'frac_converged', 'frac_cycled', 'mean_cycle_period',
+    'mean_rounds', 'max_rounds',
     # Mean / max accepted swaps per firm across the n_trials trials.
     # At ms=1 this is a count; at higher ms it's the simultaneous-swap-event count
     # divided by n. Useful for "how much rewiring happened before stabilization".
     'mean_swaps_per_firm', 'max_swaps_per_firm',
     'c', 'cc', 'aisi_spread', 'sigma_w', 'max_swaps', 'nb_rounds', 'n_trials',
     'a_config', 'b_config', 'z_config',
+    # Anticipation mode and per-firm tier-visibility config (used only when
+    # mode == "limited"). tier_mean and tier_std are the input distribution
+    # parameters; each tech matrix's actual realised tier_arr is determined
+    # by the tech_seed.
+    'mode', 'tier_mean', 'tier_std',
     'base_seed', 'tech_seed',
 ]
 
@@ -150,7 +183,8 @@ def run_study():
     print(f"Diversity study  n=[{N_MIN},{N_MAX}]  {N_TECH_MATRICES} tech matrices  {N_TRIALS} trials each")
     print(f"  Network : c={C}, cc={CC}, aisi_spread={AISI_SPREAD}, sigma_w={SIGMA_W}")
     print(f"  Economic: a={A_CONFIG}, b={B_CONFIG}, z={Z_CONFIG}")
-    print(f"  Sim     : nb_rounds={NB_ROUNDS}, max_swaps={MAX_SWAPS}")
+    print(f"  Sim     : nb_rounds={NB_ROUNDS}, max_swaps={MAX_SWAPS}, mode={MODE}, "
+          f"tier_mean={TIER_MEAN}, tier_std={TIER_STD}")
     print(f"  Output  : {OUTPUT_FILE}  (resuming {done}/{total} already done)")
     print("=" * 70)
 
@@ -187,6 +221,14 @@ def run_study():
             Wbar = base_state['Wbar']
             AiSi = base_state['AiSi']
 
+            # Per-tech tier-visibility array (only used when MODE == "limited").
+            # Build a fresh np.random.Generator from tech_seed to avoid disturbing
+            # the global numpy RNG state used by perm_seed inside the simulator.
+            tier_arr = None
+            if MODE in ("limited", "naive_limited"):
+                tier_rng = np.random.default_rng(tech_seed + 7919)  # +prime: avoid collision
+                tier_arr = _build_tier_array(n, TIER_MEAN, TIER_STD, tier_rng)
+
             common = {
                 'n': n, 'tech_idx': tech_idx,
                 'c': C, 'cc': CC, 'aisi_spread': AISI_SPREAD, 'sigma_w': SIGMA_W,
@@ -194,6 +236,9 @@ def run_study():
                 'a_config': json.dumps(A_CONFIG),
                 'b_config': json.dumps(B_CONFIG),
                 'z_config': json.dumps(Z_CONFIG),
+                'mode': MODE,
+                'tier_mean': TIER_MEAN,
+                'tier_std': TIER_STD,
                 'base_seed': BASE_SEED,
                 'tech_seed': tech_seed,
             }
@@ -205,25 +250,28 @@ def run_study():
             # ------------------------------------------------------------------
             if blue_key not in existing_keys:
                 t0 = time.time()
-                final_lists, rounds_list, conv_list, cycle_list, rewires_list = [], [], [], [], []
+                final_lists, rounds_list, conv_list, cycle_periods_list, rewires_list = [], [], [], [], []
                 for trial in range(N_TRIALS):
                     result = run_unified_simulation(
-                        base_state, a, b, z, mode="full",
+                        base_state, a, b, z, mode=MODE,
                         seed=seed_off + 1000 + trial,
                         max_swaps=MAX_SWAPS,
                         nb_rounds=NB_ROUNDS,
+                        tier=tier_arr,
                     )
                     final_lists.append(result['final_supplier_list'])
                     rounds_list.append(int(result['rounds']))
                     conv_list.append(bool(result['converged']))
-                    cycle_list.append(result.get('cycle_period') == 2)
+                    cycle_periods_list.append(result.get('cycle_period'))
                     rewires_list.append(int(result.get('total_rewirings', 0)))
 
                 diversity = compute_diversity(final_lists)
                 rewires_arr = np.asarray(rewires_list, dtype=float) / float(n)
+                cycled = [cp for cp in cycle_periods_list if isinstance(cp, int) and cp >= 2]
                 row = {**common, 'series': 'same_tech_same_init', 'diversity': diversity,
                        'frac_converged':       float(np.mean(conv_list)),
-                       'frac_cycled':          float(np.mean(cycle_list)),
+                       'frac_cycled':          float(len(cycled)) / max(N_TRIALS, 1),
+                       'mean_cycle_period':    (float(np.mean(cycled)) if cycled else float('nan')),
                        'mean_rounds':          float(np.mean(rounds_list)),
                        'max_rounds':           int(np.max(rounds_list)),
                        'mean_swaps_per_firm':  float(np.mean(rewires_arr)),
@@ -233,7 +281,7 @@ def run_study():
                 elapsed = time.time() - t0
                 print(f"[{done:5d}/{total}] n={n:2d} tech={tech_idx:2d} same_tech_same_init  "
                       f"diversity={diversity:.3f}  conv={row['frac_converged']:.2f}  "
-                      f"cyc={row['frac_cycled']:.2f}  "
+                      f"cyc={row['frac_cycled']:.2f}(<k>={row['mean_cycle_period']:.1f})  "
                       f"rounds={row['mean_rounds']:.1f}/{row['max_rounds']}  "
                       f"swaps/firm={row['mean_swaps_per_firm']:.2f}  ({elapsed:.1f}s)")
 
@@ -245,28 +293,31 @@ def run_study():
             # ------------------------------------------------------------------
             if red_key not in existing_keys:
                 t0 = time.time()
-                final_lists, rounds_list, conv_list, cycle_list, rewires_list = [], [], [], [], []
+                final_lists, rounds_list, conv_list, cycle_periods_list, rewires_list = [], [], [], [], []
                 for trial in range(N_TRIALS):
                     trial_state = generate_random_initial_network(
                         n, Wbar, AiSi, seed=seed_off + 2000 + trial,
                     )
                     result = run_unified_simulation(
-                        trial_state, a, b, z, mode="full",
+                        trial_state, a, b, z, mode=MODE,
                         seed=seed_off + 3000 + trial,
                         max_swaps=MAX_SWAPS,
                         nb_rounds=NB_ROUNDS,
+                        tier=tier_arr,
                     )
                     final_lists.append(result['final_supplier_list'])
                     rounds_list.append(int(result['rounds']))
                     conv_list.append(bool(result['converged']))
-                    cycle_list.append(result.get('cycle_period') == 2)
+                    cycle_periods_list.append(result.get('cycle_period'))
                     rewires_list.append(int(result.get('total_rewirings', 0)))
 
                 diversity = compute_diversity(final_lists)
                 rewires_arr = np.asarray(rewires_list, dtype=float) / float(n)
+                cycled = [cp for cp in cycle_periods_list if isinstance(cp, int) and cp >= 2]
                 row = {**common, 'series': 'same_tech_dif_init', 'diversity': diversity,
                        'frac_converged':       float(np.mean(conv_list)),
-                       'frac_cycled':          float(np.mean(cycle_list)),
+                       'frac_cycled':          float(len(cycled)) / max(N_TRIALS, 1),
+                       'mean_cycle_period':    (float(np.mean(cycled)) if cycled else float('nan')),
                        'mean_rounds':          float(np.mean(rounds_list)),
                        'max_rounds':           int(np.max(rounds_list)),
                        'mean_swaps_per_firm':  float(np.mean(rewires_arr)),
@@ -276,7 +327,7 @@ def run_study():
                 elapsed = time.time() - t0
                 print(f"[{done:5d}/{total}] n={n:2d} tech={tech_idx:2d} same_tech_dif_init  "
                       f"diversity={diversity:.3f}  conv={row['frac_converged']:.2f}  "
-                      f"cyc={row['frac_cycled']:.2f}  "
+                      f"cyc={row['frac_cycled']:.2f}(<k>={row['mean_cycle_period']:.1f})  "
                       f"rounds={row['mean_rounds']:.1f}/{row['max_rounds']}  "
                       f"swaps/firm={row['mean_swaps_per_firm']:.2f}  ({elapsed:.1f}s)")
 
@@ -313,6 +364,16 @@ def parse_args():
                         help='e.g. homogeneous:0.5 or uniform:0.3:0.7')
     parser.add_argument('--z_config', type=str, default=None,
                         help='e.g. homogeneous:1.0 or uniform:0.5:2.0')
+    parser.add_argument('--mode', type=str, default=None,
+                        choices=['full', 'limited', 'naive_limited', 'aa'],
+                        help='Anticipation mode: full (default), limited '
+                             '(boundary-conditioned partial GE; needs --tier_mean), '
+                             'naive_limited, or aa.')
+    parser.add_argument('--tier_mean', type=float, default=None,
+                        help='Mean tier visibility (used when mode=limited/naive_limited).')
+    parser.add_argument('--tier_std', type=float, default=None,
+                        help='Std tier visibility. 0 = homogeneous; >0 = '
+                             'lognormal heterogeneous draw per tech matrix.')
     parser.add_argument('--base_seed', type=int, default=None,
                         help='Monte Carlo offset; different values give independent RNG streams')
     parser.add_argument('--output', type=str, default=None)
@@ -346,9 +407,18 @@ if __name__ == "__main__":
         A_CONFIG = parse_config_arg(args.a_config)
     if args.z_config is not None:
         Z_CONFIG = parse_config_arg(args.z_config)
+    if args.mode is not None:
+        MODE = args.mode
+    if args.tier_mean is not None:
+        TIER_MEAN = args.tier_mean
+    if args.tier_std is not None:
+        TIER_STD = args.tier_std
     if args.base_seed is not None:
         BASE_SEED = args.base_seed
     if args.output is not None:
         OUTPUT_FILE = args.output
+
+    if MODE in ("limited", "naive_limited") and args.tier_mean is None:
+        raise SystemExit(f"--mode={MODE} requires --tier_mean (and optional --tier_std).")
 
     run_study()
