@@ -195,6 +195,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         trace_edges = [_edges_from_suppliers(supplier_id_list)]
         trace_prices = [eq['P'].copy()]
         trace_price_steps = [0]
+        trace_swap_edges = [_edges_from_suppliers(supplier_id_list)]  # aligned with trace_price_steps
         trace_rewire_events = []
         converged_at = None
 
@@ -211,6 +212,10 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
     t = 0
     total_rewirings = 0
     rewirings_this_round = 0
+    per_firm_swaps = np.zeros(n, dtype=int)        # per-firm rewire counter
+    initial_prices = eq['P'].copy()                # for cost-reduction analysis
+    sum_p_history = [float(eq['P'].sum())]         # one entry per round (after that round)
+    min_prices = eq['P'].copy()                    # element-wise running min
     for r in range(1, _nb_rounds + 1):
         rewirings_this_round = 0
         max_swap_binding = False
@@ -248,13 +253,17 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
                 eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
                 rewirings_this_round += len(best_adds)
                 total_rewirings += len(best_adds)
+                per_firm_swaps[id_firm] += 1
+                np.minimum(min_prices, eq['P'], out=min_prices)
                 if len(best_adds) == max_swaps:
                     max_swap_binding = True
                 if trace:
                     trace_rewire_events.append({'t': t, 'round': r, 'firm': int(id_firm)})
                     trace_prices.append(eq['P'].copy())
                     trace_price_steps.append(t)
+                    trace_swap_edges.append(_edges_from_suppliers(supplier_id_list))
 
+        sum_p_history.append(float(eq['P'].sum()))
         if trace:
             trace_scalars.append({
                 't': r,
@@ -294,6 +303,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         if not trace_price_steps or trace_price_steps[-1] != t:
             trace_prices.append(eq['P'].copy())
             trace_price_steps.append(t)
+            trace_swap_edges.append(_edges_from_suppliers(supplier_id_list))
 
     result = {
         # `converged` keeps its strict meaning (period-1 only) for backward
@@ -305,7 +315,11 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         'total_rewirings': int(total_rewirings),
         'initial_utility': initial_utility,
         'final_utility': calculate_utility(eq),
+        'initial_prices': initial_prices,
         'final_prices': eq['P'],
+        'min_prices': min_prices,
+        'sum_p_history': np.asarray(sum_p_history),
+        'per_firm_swaps': per_firm_swaps,
         'final_supplier_list': supplier_id_list,
         'mode': mode,
     }
@@ -315,6 +329,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
             'edges': trace_edges,
             'prices': trace_prices,
             'price_steps': trace_price_steps,
+            'swap_edges': trace_swap_edges,
             'rewire_events': trace_rewire_events,
             'converged_at': converged_at,
         }
