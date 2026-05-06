@@ -3,6 +3,7 @@ output/
 sweeps/
 figures/
 results/
+paper/
 tmp_*/
 *.png
 
