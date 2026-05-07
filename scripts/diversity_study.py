@@ -68,6 +68,10 @@ TIER_STD  = 0.0    # tier_arr is constant = round(TIER_MEAN); else lognormal.
 
 BASE_SEED = 0  # Monte Carlo offset; different values -> independent RNG streams
 
+# Which diversity series to compute: 'both' | 'same_init_only' | 'dif_init_only'.
+# 'dif_init_only' halves runtime when only same_tech_dif_init is needed.
+SERIES_FILTER = 'both'
+
 OUTPUT_FILE = "diversity_results.csv"
 
 
@@ -248,7 +252,7 @@ def run_study():
             #   perm_seed = 1000 + trial  controls np.random.permutation inside
             #   the simulation (evaluation order of firms each round).
             # ------------------------------------------------------------------
-            if blue_key not in existing_keys:
+            if blue_key not in existing_keys and SERIES_FILTER != 'dif_init_only':
                 t0 = time.time()
                 final_lists, rounds_list, conv_list, cycle_periods_list, rewires_list = [], [], [], [], []
                 for trial in range(N_TRIALS):
@@ -291,7 +295,7 @@ def run_study():
             #   selection via generate_random_initial_network.
             #   perm_seed = 3000 + trial  controls firm evaluation order.
             # ------------------------------------------------------------------
-            if red_key not in existing_keys:
+            if red_key not in existing_keys and SERIES_FILTER != 'same_init_only':
                 t0 = time.time()
                 final_lists, rounds_list, conv_list, cycle_periods_list, rewires_list = [], [], [], [], []
                 for trial in range(N_TRIALS):
@@ -376,6 +380,10 @@ def parse_args():
                              'lognormal heterogeneous draw per tech matrix.')
     parser.add_argument('--base_seed', type=int, default=None,
                         help='Monte Carlo offset; different values give independent RNG streams')
+    parser.add_argument('--series_filter', type=str, default=None,
+                        choices=['both', 'same_init_only', 'dif_init_only'],
+                        help='Which series to compute. dif_init_only halves runtime '
+                             'when only same_tech_dif_init is needed.')
     parser.add_argument('--output', type=str, default=None)
     return parser.parse_args()
 
@@ -415,6 +423,8 @@ if __name__ == "__main__":
         TIER_STD = args.tier_std
     if args.base_seed is not None:
         BASE_SEED = args.base_seed
+    if args.series_filter is not None:
+        SERIES_FILTER = args.series_filter
     if args.output is not None:
         OUTPUT_FILE = args.output
 
