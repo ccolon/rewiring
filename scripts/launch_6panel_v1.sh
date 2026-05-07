@@ -18,14 +18,17 @@
 #       center: sw varies,   aisi=0.05, z_width=0.1
 #       right : z_width vrs, aisi=0.05, sw=0.1
 #
-# Sweep: 11 levels per axis, {0, 0.01, 0.02, ..., 0.10}.
+# Sweep grid (per-axis, 6 levels, focused on each axis's regime structure):
+#   aisi    : {0, 0.005, 0.01, 0.02, 0.05, 0.1}      (threshold ~0.02, saturation by 0.05)
+#   sigma_w : {0, 0.025, 0.05, 0.1, 0.2, 0.3}        (threshold + plateau + dropoff)
+#   z_width : {0, 0.1, 0.2, 0.3, 0.4, 0.5}           (small-effect zone + suppression zone)
 #
 # Sample budget: 5 tech matrices x 50 dif_init inits = 250 sims per cell.
 # Cells:
-#   4 base series x 2 ms x (1 origin + 10 aisi-only + 10 sw-only + 10 z-only)
-#       = 4 x 2 x 31 = 248
-#   3 extras x 2 ms x 11 sweep levels = 66
-#   Total = 314 jobs.
+#   4 base series x 2 ms x (1 origin + 5 aisi-only + 5 sw-only + 5 z-only)
+#       = 4 x 2 x 16 = 128
+#   3 extras x 2 ms x 6 sweep levels = 36
+#   Total = 164 jobs.
 #
 # Usage:
 #     bash launch_6panel_v1.sh                 # 314 jobs, BASE_SEED=1300
@@ -53,15 +56,17 @@ if ! $DRY_RUN; then
 fi
 
 TIME_LIMIT="48:00:00"
-MEM="6G"
+MEM="2G"
 NB_ROUNDS=200
 N_TECH=5
 N_TRIALS=50
 N=100
 CC=4
 
-# 11-level grid {0, 0.01, ..., 0.10}.
-LEVELS=(0.0 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.10)
+# Per-axis sweep grids (6 levels each, focused on each axis's interesting regime).
+LEVELS_AISI=(0.0    0.005 0.01  0.02  0.05  0.10)
+LEVELS_SW=(  0.0    0.025 0.05  0.10  0.20  0.30)
+LEVELS_ZW=(  0.0    0.10  0.20  0.30  0.40  0.50)
 
 # z_width to z_config: hom 1.0 if 0, else unif (1-w):(1+w) (formatted as "low:high").
 zcfg_for_width() {
@@ -108,7 +113,7 @@ python ${SCRIPT_DIR}/scripts/diversity_study.py \
     fi
 }
 
-# 31 unique cells per (base series, ms): origin + 3 axes x 10 sweep levels.
+# 16 unique cells per (base series, ms): origin + 3 axes x 5 sweep levels each.
 submit_base() {
     # ms a_cfg b_cfg tag
     local ms=$1 a_cfg=$2 b_cfg=$3 tag=$4
@@ -116,41 +121,41 @@ submit_base() {
     # Origin (0, 0, 0)
     submit_cell ${N} ${CC} ${ms} 0.0 0.0 0.0 "${a_cfg}" "${b_cfg}" "${tag}"
 
-    # aisi sweep at sw=0, z_width=0
-    for v in "${LEVELS[@]:1}"; do  # skip the 0 (already in origin)
+    # aisi sweep at sw=0, z_width=0  (skip the 0 already in origin)
+    for v in "${LEVELS_AISI[@]:1}"; do
         submit_cell ${N} ${CC} ${ms} ${v} 0.0 0.0 "${a_cfg}" "${b_cfg}" "${tag}"
     done
     # sw sweep at aisi=0, z_width=0
-    for v in "${LEVELS[@]:1}"; do
+    for v in "${LEVELS_SW[@]:1}"; do
         submit_cell ${N} ${CC} ${ms} 0.0 ${v} 0.0 "${a_cfg}" "${b_cfg}" "${tag}"
     done
     # z_width sweep at aisi=0, sw=0
-    for v in "${LEVELS[@]:1}"; do
+    for v in "${LEVELS_ZW[@]:1}"; do
         submit_cell ${N} ${CC} ${ms} 0.0 0.0 ${v} "${a_cfg}" "${b_cfg}" "${tag}"
     done
 }
 
-# Each extra is a single 11-level sweep on the panel's axis.
+# Each extra is a single 6-level sweep on the panel's axis (HRS base).
 submit_extra_left() {
-    # left panel: aisi varies, sw=0.1, z_width=0.1, HRS base
+    # aisi varies, sw=0.1, z_width=0.1
     local ms=$1
-    for v in "${LEVELS[@]}"; do
+    for v in "${LEVELS_AISI[@]}"; do
         submit_cell ${N} ${CC} ${ms} ${v} 0.1 0.1 \
             homogeneous:0.5 uniform:0.9:1.1 "extra_aisi"
     done
 }
 submit_extra_center() {
-    # center panel: sw varies, aisi=0.05, z_width=0.1, HRS base
+    # sw varies, aisi=0.05, z_width=0.1
     local ms=$1
-    for v in "${LEVELS[@]}"; do
+    for v in "${LEVELS_SW[@]}"; do
         submit_cell ${N} ${CC} ${ms} 0.05 ${v} 0.1 \
             homogeneous:0.5 uniform:0.9:1.1 "extra_sw"
     done
 }
 submit_extra_right() {
-    # right panel: z_width varies, aisi=0.05, sw=0.1, HRS base
+    # z_width varies, aisi=0.05, sw=0.1
     local ms=$1
-    for v in "${LEVELS[@]}"; do
+    for v in "${LEVELS_ZW[@]}"; do
         submit_cell ${N} ${CC} ${ms} 0.05 0.1 ${v} \
             homogeneous:0.5 uniform:0.9:1.1 "extra_zw"
     done
@@ -180,4 +185,4 @@ done
 echo
 echo "Done: $count jobs queued (BASE_SEED=${BASE_SEED}, "
 echo "      N_TECH=${N_TECH}, N_TRIALS=${N_TRIALS} (dif_init only), "
-echo "      11-level sweep on each axis, time=${TIME_LIMIT})"
+echo "      6-level focused sweeps per axis, MEM=${MEM}, time=${TIME_LIMIT})"
