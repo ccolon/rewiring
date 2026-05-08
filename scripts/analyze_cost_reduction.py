@@ -15,10 +15,12 @@ Usage:
 """
 import argparse
 import glob
+import json
 import os
 import sys
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 import numpy as np
 import pandas as pd
 
@@ -59,6 +61,226 @@ def op_point_label(row):
     if 'homogeneous:0.9' in str(row['b_config']) and row['n'] == 100:
         return 'opC: n=100, b=0.9 hom, no AiSi'
     return f"n={row['n']}, b={row['b_config']}, aisi={row['aisi_spread']}"
+
+
+def _cfg_str(s):
+    """Compact 'hom:VAL' or 'unif:LO:HI' from either a JSON config dict
+    (diversity_study.py output) or the CLI form 'homogeneous:V' /
+    'uniform:LO:HI' (cost_reduction_study.py output)."""
+    if pd.isna(s):
+        return 'NA'
+    s = str(s).strip()
+    if s.startswith('{'):
+        try:
+            d = json.loads(s)
+            if d['mode'] == 'homogeneous':
+                return f"hom:{d['value']}"
+            return f"unif:{d['min']}:{d['max']}"
+        except Exception:
+            return 'NA'
+    parts = s.split(':')
+    if parts[0] in ('homogeneous', 'hom') and len(parts) >= 2:
+        return f"hom:{float(parts[1])}"
+    if parts[0] in ('uniform', 'unif') and len(parts) >= 3:
+        return f"unif:{float(parts[1])}:{float(parts[2])}"
+    return 'NA'
+
+
+# -----------------------------------------------------------------------------
+# Option A: cost-gap metric using the matched-init full-mode reference
+# -----------------------------------------------------------------------------
+
+def compute_cost_gap_a(trials):
+    """Add `cost_gap_A` column to `trials`, defined as
+
+        cost_gap_A = (sum_p_final_window_limited - sum_p_final_window_full)
+                     / sum_p_final_window_limited
+
+    where the full-mode reference is matched on the full set of
+    cell-defining parameters AND (tech_seed, init_seed). Rows without a
+    matching full-mode reference get NaN.
+
+    Important: matching on (tech_seed, init_seed) alone is unsafe because
+    cost_reduction_study.py reuses the same tech_seed across n values, so
+    n=50 and n=100 share tech_seed numbers but represent different economies.
+    The full key resolves this.
+    """
+    trials = trials.copy()
+    full = trials[trials['mode'] == 'full']
+    if len(full) == 0:
+        trials['sum_p_full_match'] = np.nan
+        trials['cost_gap_A']       = np.nan
+        return trials
+
+    key_cols = ['n', 'cc', 'aisi_spread', 'sigma_w',
+                'a_config', 'b_config', 'z_config',
+                'max_swaps', 'tech_seed', 'init_seed']
+    full_lookup = (full.drop_duplicates(key_cols)
+                       [key_cols + ['sum_p_final_window']]
+                       .rename(columns={'sum_p_final_window': 'sum_p_full_match'}))
+
+    trials = trials.merge(full_lookup, on=key_cols, how='left')
+    trials['cost_gap_A'] = ((trials['sum_p_final_window'] -
+                              trials['sum_p_full_match']) /
+                             trials['sum_p_final_window'])
+    return trials
+
+
+def print_cost_gap_coverage(trials):
+    print("\n=== cost_gap_A coverage (option A: matched-init full-mode reference) ===")
+    lim = trials[trials['mode'] == 'limited']
+    n_total   = len(lim)
+    n_with_full = lim['cost_gap_A'].notna().sum()
+    print(f"  limited rows total: {n_total};  with matched full-mode ref: "
+          f"{n_with_full}  ({100 * n_with_full / max(n_total, 1):.1f}%)")
+    if n_with_full == 0:
+        return
+    op_label_col = lim.apply(op_point_label, axis=1)
+    for op, idxs in op_label_col.groupby(op_label_col).groups.items():
+        sub = lim.loc[idxs]
+        n = sub['cost_gap_A'].notna().sum()
+        if n == 0:
+            continue
+        print(f"  {op[:55]:55} | {n} usable cost_gap_A rows; "
+              f"mean = {sub['cost_gap_A'].mean():.4f}, "
+              f"min = {sub['cost_gap_A'].min():.4f}, "
+              f"max = {sub['cost_gap_A'].max():.4f}")
+
+
+# -----------------------------------------------------------------------------
+# 2-panel cost-reduction-potential figure (option A)
+# -----------------------------------------------------------------------------
+
+# Operating-point definitions for the 2-panel figure.  Each entry:
+#   (id, label, key dict, color, marker, linestyle)
+COST_GAP_OP_DEFS = [
+    ('opA', r'Homogeneous DRS, $n=50$',
+     {'n': 50,  'b_short': 'hom:0.9',      'aisi_spread': 0.0},
+     'C2', 'o', '-'),
+    ('opB', r'Full heterogeneity, $n=50$',
+     {'n': 50,  'b_short': 'unif:0.9:1.1', 'aisi_spread': 0.05},
+     'C0', 's', '-'),
+    ('opC', r'Homogeneous DRS, $n=100$',
+     {'n': 100, 'b_short': 'hom:0.9',      'aisi_spread': 0.0},
+     'C2', 'D', '--'),
+]
+
+
+def _select_op(trials, keys):
+    sub = trials.copy()
+    for col, val in keys.items():
+        if col == 'aisi_spread':
+            sub = sub[np.isclose(sub['aisi_spread'], val, atol=1e-9)]
+        else:
+            sub = sub[sub[col] == val]
+    return sub
+
+
+def fig_cost_gap_2panel(trials, save_path):
+    """Two-panel cost-reduction-potential figure (option A), parallel layout
+    to plot_visibility_2panel.py:
+
+        (a) Homogeneous tau:    x = tau_i (= tau for all i)
+        (b) Heterogeneous tau:  x = mean tau (lognormal, std = mean)
+
+    Series: one curve per operating point.
+    """
+    if 'b_short' not in trials.columns:
+        trials = trials.copy()
+        trials['b_short'] = trials['b_config'].apply(_cfg_str)
+
+    plt.rcParams.update({
+        'font.size':        11,
+        'axes.titlesize':   12,
+        'axes.labelsize':   11,
+        'xtick.labelsize':  10,
+        'ytick.labelsize':  10,
+        'legend.fontsize':  9.5,
+    })
+
+    fig, axes = plt.subplots(1, 2, figsize=(8.5, 4.0),
+                              constrained_layout=True, sharey=True)
+    # Will compute a data-driven ylim after plotting, so leave for now.
+    plotted_ymins, plotted_ymaxs = [], []
+
+    # Panel (a): homogeneous tau
+    for _, label, keys, color, marker, ls in COST_GAP_OP_DEFS:
+        sub = _select_op(trials, keys)
+        sub = sub[(sub['mode'] == 'limited') &
+                  (sub['tier_std'].fillna(0) == 0) &
+                  sub['cost_gap_A'].notna()]
+        if len(sub) == 0:
+            continue
+        g = (sub.groupby('tier_mean')['cost_gap_A']
+                  .agg(['mean', 'sem', 'count'])
+                  .sort_index())
+        ys = g['mean'].values
+        es = 1.96 * g['sem'].fillna(0).values
+        plotted_ymins.append(np.nanmin(ys - es))
+        plotted_ymaxs.append(np.nanmax(ys + es))
+        axes[0].errorbar(g.index.values, ys, yerr=es,
+                         fmt=marker, ls=ls, color=color,
+                         markersize=7, lw=1.6, capsize=3,
+                         label=label, alpha=0.95)
+
+    # Panel (b): heterogeneous tau, with homo tau=0 spliced in for the
+    # leftmost point (lognormal degenerates to delta_0 when its mean is 0).
+    for _, label, keys, color, marker, ls in COST_GAP_OP_DEFS:
+        sub = _select_op(trials, keys)
+        hetero = sub[(sub['mode'] == 'limited') &
+                     (sub['tier_std'].fillna(0) > 0)]
+        if len(hetero) == 0:
+            continue
+        tau0 = sub[(sub['mode'] == 'limited') &
+                   (sub['tier_std'].fillna(0) == 0) &
+                   (sub['tier_mean'] == 0)]
+        sub_h = pd.concat([tau0, hetero], ignore_index=True, sort=False)
+        sub_h = sub_h[sub_h['cost_gap_A'].notna()]
+        if len(sub_h) == 0:
+            continue
+        g = (sub_h.groupby('tier_mean')['cost_gap_A']
+                    .agg(['mean', 'sem', 'count'])
+                    .sort_index())
+        ys = g['mean'].values
+        es = 1.96 * g['sem'].fillna(0).values
+        plotted_ymins.append(np.nanmin(ys - es))
+        plotted_ymaxs.append(np.nanmax(ys + es))
+        axes[1].errorbar(g.index.values, ys, yerr=es,
+                         fmt=marker, ls=ls, color=color,
+                         markersize=7, lw=1.6, capsize=3,
+                         label=label, alpha=0.95)
+
+    # Per-panel formatting
+    axes[0].set_title(r'(a) Homogeneous $\tau$', loc='left')
+    axes[0].set_xlabel(r'Tier visibility $\tau$')
+    axes[0].set_ylabel('Cost-reduction potential')
+    axes[0].yaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=2))
+    axes[0].set_xticks([0, 1, 2, 3, 4, 5, 6])
+    axes[0].grid(alpha=0.3)
+    axes[0].axhline(0, color='black', lw=0.6, alpha=0.4)
+
+    axes[1].set_title(r'(b) Heterogeneous $\tau$ (lognormal, std = mean)',
+                      loc='left')
+    axes[1].set_xlabel(r'Mean tier visibility $\bar{\tau}$')
+    axes[1].set_xticks([0, 1, 2, 3, 4, 5, 6])
+    axes[1].grid(alpha=0.3)
+    axes[1].axhline(0, color='black', lw=0.6, alpha=0.4)
+    axes[1].set_ylabel('')
+    axes[1].tick_params(labelleft=False)
+
+    # Data-driven y-range with small padding (sharey, so set once).
+    if plotted_ymins:
+        lo, hi = min(plotted_ymins), max(plotted_ymaxs)
+        pad = 0.1 * max(hi - lo, 1e-4)
+        axes[0].set_ylim(lo - pad, hi + pad)
+
+    h, l = axes[0].get_legend_handles_labels()
+    if h:
+        axes[0].legend(h, l, loc='center right', framealpha=0.95)
+
+    fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f"Wrote {save_path}")
+    plt.close(fig)
 
 
 # -----------------------------------------------------------------------------
@@ -263,11 +485,26 @@ def main():
     out_dir = args.output or os.path.join(args.data_dir, 'figures')
     os.makedirs(out_dir, exist_ok=True)
 
+    # Allow non-ASCII in console output on Windows.
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
     trials = load_trial_csvs(args.data_dir)
     firms  = load_firm_csvs(args.data_dir)
     print(f"Loaded {len(trials)} trials, {len(firms)} firm-level rows")
 
     print_summary(trials)
+
+    # Compute option-A cost gap (matched-init full-mode reference) and produce
+    # the manuscript-faithful 2-panel figure (parallel layout to
+    # plot_visibility_2panel.py).
+    trials = compute_cost_gap_a(trials)
+    print_cost_gap_coverage(trials)
+    fig_cost_gap_2panel(trials,
+                        save_path=os.path.join(out_dir,
+                                               'fig_cost_gap_A_2panel.png'))
 
     # Categorise op-points
     trials['op_label'] = trials.apply(op_point_label, axis=1)

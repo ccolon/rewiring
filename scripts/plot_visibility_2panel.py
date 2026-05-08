@@ -32,6 +32,7 @@ import argparse
 import glob
 import json
 import os
+import sys
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
@@ -202,6 +203,81 @@ def coverage_summary(df):
                   f"trials/tau: {n_per_tau}")
 
 
+def _select_with_tau0_splice(df, keys, mode):
+    """Same filtering as plot_panel: homo uses tier_std==0; hetero splices the
+    homo τ=0 row in as the leftmost point."""
+    sub = select(df, keys)
+    if mode == 'homo':
+        return sub[(sub['tau_mode'] == 'homo') & (sub['tier_std'] == 0)]
+    hetero = sub[(sub['tau_mode'] == 'hetero') & (sub['tier_std'] > 0)]
+    if len(hetero) == 0:
+        return hetero
+    tau0 = sub[(sub['tau_mode'] == 'homo') & (sub['tier_std'] == 0) &
+               (sub['tier_mean'] == 0)]
+    return pd.concat([tau0, hetero], ignore_index=True, sort=False)
+
+
+def print_unstable_breakdown(df):
+    """% of unstable runs per (series, mode, tau)."""
+    print("\n=== Unstable fraction "
+          "(truncated, no fixed point, no detected cycle) ===")
+    for sid, label, keys, _ in SERIES_DEFS:
+        for mode_label, mode_filter in [('homo  τ', 'homo'), ('hetero τ', 'hetero')]:
+            sub = _select_with_tau0_splice(df, keys, mode_filter)
+            if len(sub) == 0:
+                continue
+            cp = pd.to_numeric(sub['cycle_period'], errors='coerce')
+            sub2 = sub.copy()
+            sub2['is_fix']  = (sub2['converged'].astype(int) == 1) | (cp == 1)
+            sub2['is_cyc']  = (~sub2['is_fix']) & (cp >= 2)
+            sub2['is_unst'] = (~sub2['is_fix']) & (~sub2['is_cyc'])
+            g = (sub2.groupby('tier_mean')
+                       .agg(n=('is_unst', 'size'),
+                            p_unst=('is_unst', 'mean'))
+                       .reset_index()
+                       .sort_values('tier_mean'))
+            print(f"\n  {sid} -- {label}  ({mode_label})")
+            for _, row in g.iterrows():
+                print(f"      τ={int(row['tier_mean']):>2d}:  "
+                      f"{100 * row['p_unst']:>5.1f}% unstable  (n={int(row['n'])})")
+
+
+def print_cycle_period_breakdown(df):
+    """For each (series, mode, tau) where cycle_fraction > 0, show the period-k
+    distribution among cycled runs."""
+    print("\n=== Cycle-period breakdown per (series, τ)  "
+          "[shown only when cycle fraction > 0] ===")
+    for sid, label, keys, _ in SERIES_DEFS:
+        for mode_label, mode_filter in [('homo  τ', 'homo'), ('hetero τ', 'hetero')]:
+            sub = _select_with_tau0_splice(df, keys, mode_filter)
+            if len(sub) == 0:
+                continue
+            cp = pd.to_numeric(sub['cycle_period'], errors='coerce')
+            sub2 = sub.copy()
+            sub2['cp'] = cp
+            sub2['is_fix'] = (sub2['converged'].astype(int) == 1) | (cp == 1)
+            sub2['is_cyc'] = (~sub2['is_fix']) & (cp >= 2)
+
+            printed_header = False
+            for tau, g in sub2.groupby('tier_mean'):
+                cyc = g[g['is_cyc']]
+                total = len(g)
+                if len(cyc) == 0:
+                    continue
+                if not printed_header:
+                    print(f"\n  {sid} -- {label}  ({mode_label})")
+                    printed_header = True
+                breakdown = (cyc['cp'].astype(int)
+                               .value_counts(normalize=True)
+                               .sort_index())
+                periods_str = ',  '.join(
+                    f'k={k}: {100*v:.0f}%' for k, v in breakdown.items()
+                )
+                print(f"      τ={int(tau):>2d}:  "
+                      f"cycled={100*len(cyc)/total:>5.1f}% "
+                      f"(n={len(cyc)}/{total}) -- {periods_str}")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('data_dir', nargs='?', default='results/visibility',
@@ -210,8 +286,16 @@ def main():
                    help='Output PNG path (default: <data_dir>/figure_visibility_2panel.png)')
     args = p.parse_args()
 
+    # Allow τ in console output on Windows.
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
     df = load_data(args.data_dir)
     coverage_summary(df)
+    print_unstable_breakdown(df)
+    print_cycle_period_breakdown(df)
 
     out_path = args.output or os.path.join(args.data_dir, 'figure_visibility_2panel.png')
 
