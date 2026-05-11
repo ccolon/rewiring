@@ -28,6 +28,7 @@ import argparse
 import csv
 import os
 import sys
+from itertools import combinations
 
 import numpy as np
 
@@ -35,11 +36,17 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from rewiring.networks import generate_base_network, generate_random_initial_network
+from rewiring.networks import (
+    build_W_from_suppliers,
+    generate_base_network,
+    generate_random_initial_network,
+)
+from rewiring.equilibrium import compute_adjusted_z, compute_equilibrium_full
 from rewiring.simulation import run_unified_simulation
 
 
 CYCLE_WINDOW_MAX = 10  # maximum K for the final-window mean(sum_p)
+R_WINDOW = 10          # window length for first-R / last-R swap counts
 
 
 # -----------------------------------------------------------------------------
@@ -99,6 +106,123 @@ def cost_metrics_from_result(result):
 
 
 # -----------------------------------------------------------------------------
+# Static option-B query: per-firm "best-attainable cost given current state"
+# -----------------------------------------------------------------------------
+
+def compute_static_gap(base_ns, final_supplier_list, a, b, z, max_swaps):
+    """For each firm i at the final state, enumerate ms-reachable candidate
+    supplier sets (size <= max_swaps swaps from its current set). For each
+    candidate, recompute the FULL GE with only firm i's column replaced
+    (other firms' supplier sets fixed at the trial's final state). The
+    per-firm best cost is the minimum P[i] over candidates including current.
+
+    Returns:
+        p_current   : np.ndarray (n,) -- price under current GE.
+        p_best      : np.ndarray (n,) -- min p[i] over ms-reachable candidates.
+        theta_i     : p_current - p_best.
+        theta_static: float -- (sum_p_current - sum_p_best) / sum_p_current.
+
+    This matches the manuscript's "cost-minimizing swap under full-visibility
+    anticipation" definition: every candidate's cost is evaluated under the
+    true full GE, but no firm actually acts; the comparison is purely static.
+    """
+    n = len(final_supplier_list)
+    Wbar = base_ns['Wbar']
+    AiSi = base_ns['AiSi']
+    alt  = base_ns['alternate_supplier_id_list']
+
+    # Current GE (all firms at final supplier sets).
+    sup_now = [list(s) for s in final_supplier_list]
+    W_now = build_W_from_suppliers(sup_now, Wbar)
+    adj_z_now = compute_adjusted_z(AiSi, sup_now, z)
+    eq_now = compute_equilibrium_full(a, b, adj_z_now, W_now, n)
+    p_current = np.asarray(eq_now['P'])
+
+    # We need to derive each firm's *current* alternates list at the final
+    # state.  The base_ns alternates were valid for the INITIAL configuration;
+    # any firm that swapped during the dynamics has those swaps moved between
+    # supplier_list and alternate_supplier_id_list.  Reconstruct alternates as
+    # (initial supplier_list[i] ∪ initial alternate_supplier_id_list[i]) minus
+    # the firm's current supplier set, since the simulation only moves
+    # entries between the two lists.
+    base_pool = [set(base_ns['supplier_id_list'][i]) | set(alt[i])
+                 for i in range(n)]
+    alt_now   = [sorted(base_pool[i] - set(sup_now[i])) for i in range(n)]
+
+    p_best = p_current.copy()
+
+    for i in range(n):
+        current_set = set(sup_now[i])
+        alternates = alt_now[i]
+        # Walk swap_size = 1..max_swaps, ms-reachable candidate sets
+        for swap_size in range(1, max_swaps + 1):
+            if len(alternates) < swap_size or len(current_set) < swap_size:
+                continue
+            for new_sups in combinations(alternates, swap_size):
+                for old_sups in combinations(current_set, swap_size):
+                    cand_set = (current_set - set(old_sups)) | set(new_sups)
+
+                    # W_test: same as W_now but with firm i's column replaced.
+                    W_test = W_now.copy()
+                    W_test[:, i] = 0.0
+                    for s in cand_set:
+                        W_test[s, i] = Wbar[s, i]
+
+                    # Adjusted z: only firm i's entry changes (its AiSi key).
+                    tmp_sup_i = sorted(int(s) for s in cand_set)
+                    tmp_supplier_list = sup_now.copy()
+                    tmp_supplier_list[i] = tmp_sup_i
+                    adj_z_test = compute_adjusted_z(AiSi, tmp_supplier_list, z)
+
+                    new_eq = compute_equilibrium_full(a, b, adj_z_test,
+                                                      W_test, n)
+                    cost_i = float(new_eq['P'][i])
+                    if cost_i < p_best[i]:
+                        p_best[i] = cost_i
+
+    theta_i = p_current - p_best
+    sum_pc = float(p_current.sum())
+    sum_pb = float(p_best.sum())
+    theta_static = (sum_pc - sum_pb) / sum_pc if sum_pc > 0 else 0.0
+    return p_current, p_best, theta_i, theta_static
+
+
+# -----------------------------------------------------------------------------
+# Per-firm rewire event aggregation (from trace['rewire_events'])
+# -----------------------------------------------------------------------------
+
+def aggregate_per_firm_events(rewire_events, n, rounds_run, cycle_period,
+                              R=R_WINDOW):
+    """Return three numpy int arrays of length n:
+        swaps_first_R   : count of swaps for each firm in rounds [1, R_eff]
+        swaps_last_R    : count of swaps for each firm in rounds (rounds_run - R_eff, rounds_run]
+        swaps_in_cycle  : count of swaps in the last cycle_period rounds
+                          (0 for non-cycled trials)
+
+    R_eff = min(R, rounds_run).
+    """
+    swaps_first  = np.zeros(n, dtype=int)
+    swaps_last   = np.zeros(n, dtype=int)
+    swaps_cycle  = np.zeros(n, dtype=int)
+    R_eff = max(1, min(R, rounds_run))
+
+    last_lo = max(1, rounds_run - R_eff + 1)
+    cycle_lo = (max(1, rounds_run - cycle_period + 1)
+                if isinstance(cycle_period, int) and cycle_period >= 2 else None)
+
+    for ev in rewire_events:
+        r = int(ev['round'])
+        f = int(ev['firm'])
+        if 1 <= r <= R_eff:
+            swaps_first[f] += 1
+        if last_lo <= r <= rounds_run:
+            swaps_last[f] += 1
+        if cycle_lo is not None and cycle_lo <= r <= rounds_run:
+            swaps_cycle[f] += 1
+    return swaps_first, swaps_last, swaps_cycle
+
+
+# -----------------------------------------------------------------------------
 # CSV row builders
 # -----------------------------------------------------------------------------
 
@@ -114,17 +238,40 @@ TRIAL_COLS = [
     'theta_T_sum',          # (sum_p_init - sum_p_final_window) / sum_p_init
     'theta_T_min',          # (sum_p_init - sum_p_min) / sum_p_init
     'theta_T_util',         # utility_final - utility_init  (= log p_geom_init - log p_geom_final)
+    # Option B (static query) -----------------------------------------------
+    'unstable_trial',       # 1 if rounds == nb_rounds and not converged and not cycled
+    'cycled_trial',         # 1 if cycle_period >= 2
+    'sum_p_current',        # sum_i p_current_i  (full GE at final state)
+    'sum_p_static_best',    # sum_i min over ms-reachable candidates of p[i]
+    'theta_static',         # (sum_p_current - sum_p_static_best) / sum_p_current
+    'R_window',             # window length R used for swaps_first_R / swaps_last_R
 ]
 
 FIRM_COLS = [
     'tech_seed', 'init_seed', 'firm_idx',
     'tier_i', 'p_init_i', 'p_final_i', 'p_min_i',
     'n_swaps_i', 'degree_in_i', 'degree_out_init_i', 'degree_out_final_i',
+    # Option B per-firm + rewire-event aggregates ---------------------------
+    'p_current_i',          # P[i] in the full-GE at final state
+    'p_best_static_i',      # min P[i] over ms-reachable candidates
+    'theta_static_i',       # p_current_i - p_best_static_i
+    'swaps_first_R',        # swaps in rounds 1..R_window
+    'swaps_last_R',         # swaps in last R_window rounds
+    'swaps_in_cycle',       # swaps in the last cycle_period rounds (0 if not cycled)
 ]
 
 
-def build_trial_row(args, n, tier_arr, tech_seed, init_seed, result, costs):
-    return {
+def build_trial_row(args, n, tier_arr, tech_seed, init_seed, result, costs,
+                    static_metrics=None):
+    cycle_p = result.get('cycle_period')
+    cycle_p_int = int(cycle_p) if isinstance(cycle_p, int) else None
+    unstable = int(
+        result['rounds'] >= args.nb_rounds
+        and not result['converged']
+        and cycle_p_int is None
+    )
+    cycled = int(cycle_p_int is not None and cycle_p_int >= 2)
+    row = {
         'n': n,
         'cc': args.cc,
         'max_swaps': args.max_swaps,
@@ -152,10 +299,26 @@ def build_trial_row(args, n, tier_arr, tech_seed, init_seed, result, costs):
         'theta_T_sum': (costs['sum_p_init'] - costs['sum_p_final_window']) / costs['sum_p_init'],
         'theta_T_min': (costs['sum_p_init'] - costs['sum_p_min']) / costs['sum_p_init'],
         'theta_T_util': result['final_utility'] - result['initial_utility'],
+        'unstable_trial': unstable,
+        'cycled_trial': cycled,
     }
+    if static_metrics is not None:
+        row['sum_p_current']     = static_metrics['sum_p_current']
+        row['sum_p_static_best'] = static_metrics['sum_p_static_best']
+        row['theta_static']      = static_metrics['theta_static']
+        row['R_window']          = R_WINDOW
+    else:
+        row['sum_p_current']     = ''
+        row['sum_p_static_best'] = ''
+        row['theta_static']      = ''
+        row['R_window']          = ''
+    return row
 
 
-def build_firm_rows(tech_seed, init_seed, result, tier_arr, init_supplier_list, final_supplier_list):
+def build_firm_rows(tech_seed, init_seed, result, tier_arr,
+                    init_supplier_list, final_supplier_list,
+                    p_current=None, p_best=None, theta_i=None,
+                    swaps_first=None, swaps_last=None, swaps_cycle=None):
     n = len(result['initial_prices'])
     p_init = np.asarray(result['initial_prices'])
     p_final = np.asarray(result['final_prices'])
@@ -176,7 +339,7 @@ def build_firm_rows(tech_seed, init_seed, result, tier_arr, init_supplier_list, 
 
     rows = []
     for i in range(n):
-        rows.append({
+        row = {
             'tech_seed': tech_seed,
             'init_seed': init_seed,
             'firm_idx': i,
@@ -188,7 +351,24 @@ def build_firm_rows(tech_seed, init_seed, result, tier_arr, init_supplier_list, 
             'degree_in_i': int(d_in[i]),
             'degree_out_init_i': int(d_out_init[i]),
             'degree_out_final_i': int(d_out_final[i]),
-        })
+        }
+        if p_current is not None:
+            row['p_current_i']     = float(p_current[i])
+            row['p_best_static_i'] = float(p_best[i])
+            row['theta_static_i']  = float(theta_i[i])
+        else:
+            row['p_current_i']     = ''
+            row['p_best_static_i'] = ''
+            row['theta_static_i']  = ''
+        if swaps_first is not None:
+            row['swaps_first_R']  = int(swaps_first[i])
+            row['swaps_last_R']   = int(swaps_last[i])
+            row['swaps_in_cycle'] = int(swaps_cycle[i])
+        else:
+            row['swaps_first_R']  = ''
+            row['swaps_last_R']   = ''
+            row['swaps_in_cycle'] = ''
+        rows.append(row)
     return rows
 
 
@@ -313,6 +493,7 @@ def main():
                 a=a_arr, b=b_arr, z=z_arr,
                 mode=args.mode, max_swaps=args.max_swaps,
                 nb_rounds=args.nb_rounds, seed=int((init_seed + 31337) % SEED_MOD),
+                trace=True,
             )
             if args.mode == 'limited':
                 kwargs['tier'] = tier_arr
@@ -320,11 +501,38 @@ def main():
             result = run_unified_simulation(init_ns, **kwargs)
 
             costs = cost_metrics_from_result(result)
-            trow = build_trial_row(args, n, tier_arr, tech_seed, init_seed, result, costs)
+
+            # ---- Option B: static "best-attainable cost given current state" --
+            p_current, p_best, theta_i, theta_static_val = compute_static_gap(
+                base_ns, result['final_supplier_list'],
+                a_arr, b_arr, z_arr, args.max_swaps,
+            )
+            static_metrics = {
+                'sum_p_current':     float(p_current.sum()),
+                'sum_p_static_best': float(p_best.sum()),
+                'theta_static':      float(theta_static_val),
+            }
+
+            # ---- Per-firm rewire-event windows ---------------------------------
+            trace = result.get('trace', {}) or {}
+            rewire_events = trace.get('rewire_events', []) or []
+            cycle_p = result.get('cycle_period')
+            cycle_p_int = int(cycle_p) if isinstance(cycle_p, int) else None
+            swaps_first, swaps_last, swaps_cycle = aggregate_per_firm_events(
+                rewire_events, n, result['rounds'], cycle_p_int,
+            )
+
+            trow = build_trial_row(args, n, tier_arr, tech_seed, init_seed,
+                                   result, costs, static_metrics=static_metrics)
             w_trial.writerow(trow)
 
-            for frow in build_firm_rows(tech_seed, init_seed, result, tier_arr,
-                                         init_supplier_list, result['final_supplier_list']):
+            for frow in build_firm_rows(
+                tech_seed, init_seed, result, tier_arr,
+                init_supplier_list, result['final_supplier_list'],
+                p_current=p_current, p_best=p_best, theta_i=theta_i,
+                swaps_first=swaps_first, swaps_last=swaps_last,
+                swaps_cycle=swaps_cycle,
+            ):
                 w_firm.writerow(frow)
 
             n_done += 1
