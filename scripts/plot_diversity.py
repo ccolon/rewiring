@@ -50,8 +50,7 @@ import pandas as pd
 
 AISI_FIXED            = 0.05
 SIGMA_W_FIXED         = 0.10
-Z_HALF_WIDTH_FIXED    = 0.25       # IMPORTANT: not in launcher's z_width grid {0.1, 0.2, 0.3}.
-                                    # Set to 0.2 to use the closest existing data.
+Z_HALF_WIDTH_FIXED    = 0.10       # matches launcher's z_width grid (0.1 in extras and topup)
 
 N_TARGET   = 100
 CC_TARGET  = 4
