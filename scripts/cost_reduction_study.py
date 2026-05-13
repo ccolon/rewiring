@@ -109,22 +109,28 @@ def cost_metrics_from_result(result):
 # Static option-B query: per-firm "best-attainable cost given current state"
 # -----------------------------------------------------------------------------
 
-def compute_static_gap(base_ns, final_supplier_list, a, b, z, max_swaps):
-    """For each firm i at the final state, enumerate ms-reachable candidate
-    supplier sets (size <= max_swaps swaps from its current set). For each
-    candidate, recompute the FULL GE with only firm i's column replaced
-    (other firms' supplier sets fixed at the trial's final state). The
-    per-firm best cost is the minimum P[i] over candidates including current.
+def compute_static_gap(base_ns, final_supplier_list, a, b, z,
+                       static_max_swaps):
+    """For each firm i at the final state, enumerate candidate supplier sets
+    reachable by up to `static_max_swaps` simultaneous swaps from its current
+    set and pick the candidate with the lowest counterfactual price P[i].
+
+    With `static_max_swaps = min(c, cc)` (the default in main()), the
+    enumeration covers EVERY size-c subset of firm i's pool (current
+    suppliers + alternates), i.e. "full visibility + unlimited swap" --
+    the firm-level cost frontier given the rest of the network's final
+    state.  Setting `static_max_swaps = 1` reproduces the original
+    ms-reachable-only query.
+
+    For each candidate, the full GE is recomputed with only firm i's
+    W-column replaced (other firms' supplier sets fixed at the trial's
+    final state).  No firm actually acts; this is a static query.
 
     Returns:
         p_current   : np.ndarray (n,) -- price under current GE.
-        p_best      : np.ndarray (n,) -- min p[i] over ms-reachable candidates.
+        p_best      : np.ndarray (n,) -- min p[i] over enumerated candidates.
         theta_i     : p_current - p_best.
         theta_static: float -- (sum_p_current - sum_p_best) / sum_p_current.
-
-    This matches the manuscript's "cost-minimizing swap under full-visibility
-    anticipation" definition: every candidate's cost is evaluated under the
-    true full GE, but no firm actually acts; the comparison is purely static.
     """
     n = len(final_supplier_list)
     Wbar = base_ns['Wbar']
@@ -154,8 +160,10 @@ def compute_static_gap(base_ns, final_supplier_list, a, b, z, max_swaps):
     for i in range(n):
         current_set = set(sup_now[i])
         alternates = alt_now[i]
-        # Walk swap_size = 1..max_swaps, ms-reachable candidate sets
-        for swap_size in range(1, max_swaps + 1):
+        # Walk swap_size = 1..static_max_swaps; the union of all size-k
+        # swap-out + size-k swap-in subsets covers every size-c subset of
+        # the pool when static_max_swaps >= min(c, cc).
+        for swap_size in range(1, static_max_swaps + 1):
             if len(alternates) < swap_size or len(current_set) < swap_size:
                 continue
             for new_sups in combinations(alternates, swap_size):
@@ -242,9 +250,12 @@ TRIAL_COLS = [
     'unstable_trial',       # 1 if rounds == nb_rounds and not converged and not cycled
     'cycled_trial',         # 1 if cycle_period >= 2
     'sum_p_current',        # sum_i p_current_i  (full GE at final state)
-    'sum_p_static_best',    # sum_i min over ms-reachable candidates of p[i]
+    'sum_p_static_best',    # sum_i min over enumerated candidates of p[i]
     'theta_static',         # (sum_p_current - sum_p_static_best) / sum_p_current
     'R_window',             # window length R used for swaps_first_R / swaps_last_R
+    'static_max_swaps',     # # simultaneous swaps used for the static-gap enum
+                            # (= min(c, cc) by default => full enumeration of
+                            # size-c subsets of the firm's pool)
 ]
 
 FIRM_COLS = [
@@ -307,11 +318,13 @@ def build_trial_row(args, n, tier_arr, tech_seed, init_seed, result, costs,
         row['sum_p_static_best'] = static_metrics['sum_p_static_best']
         row['theta_static']      = static_metrics['theta_static']
         row['R_window']          = R_WINDOW
+        row['static_max_swaps']  = static_metrics['static_max_swaps']
     else:
         row['sum_p_current']     = ''
         row['sum_p_static_best'] = ''
         row['theta_static']      = ''
         row['R_window']          = ''
+        row['static_max_swaps']  = ''
     return row
 
 
@@ -402,7 +415,16 @@ def main():
     p.add_argument('--n', type=int, default=50)
     p.add_argument('--c', type=int, default=4)
     p.add_argument('--cc', type=int, default=4)
-    p.add_argument('--max_swaps', type=int, default=1)
+    p.add_argument('--max_swaps', type=int, default=1,
+                   help='Max simultaneous swaps allowed to firms DURING the '
+                        'dynamics (typical: 1).')
+    p.add_argument('--static_max_swaps', type=int, default=None,
+                   help='Max simultaneous swaps used by the post-hoc static-gap '
+                        '(option-B) query. Default: min(c, cc) -- i.e. '
+                        'enumerate every size-c subset of the firm\'s pool '
+                        '("full visibility + unlimited swap"). Pass '
+                        '--static_max_swaps 1 to recover the original '
+                        'ms-reachable-only behaviour.')
     p.add_argument('--aisi_spread', type=float, default=0.0)
     p.add_argument('--sigma_w', type=float, default=0.0)
     p.add_argument('--a_config', default='homogeneous:0.5')
@@ -437,6 +459,13 @@ def main():
     firm_path = stem + '_firm' + ext
 
     os.makedirs(os.path.dirname(trial_path) or '.', exist_ok=True)
+
+    # Resolve the static-gap enumeration budget.  Default = min(c, cc), which
+    # makes the option-B query cover every size-c subset of each firm's pool
+    # ("full visibility + unlimited swap").
+    static_max_swaps = (args.static_max_swaps
+                        if args.static_max_swaps is not None
+                        else min(args.c, args.cc))
 
     # Resume keys (per trial)
     resume_keys = existing_keys(trial_path, ['tech_seed', 'init_seed'])
@@ -503,14 +532,19 @@ def main():
             costs = cost_metrics_from_result(result)
 
             # ---- Option B: static "best-attainable cost given current state" --
+            # Now uses static_max_swaps (default = min(c, cc)) so the
+            # enumeration covers all size-c subsets of the firm's pool
+            # under full-visibility evaluation -- decoupled from the
+            # per-round budget args.max_swaps used by the dynamics.
             p_current, p_best, theta_i, theta_static_val = compute_static_gap(
                 base_ns, result['final_supplier_list'],
-                a_arr, b_arr, z_arr, args.max_swaps,
+                a_arr, b_arr, z_arr, static_max_swaps,
             )
             static_metrics = {
                 'sum_p_current':     float(p_current.sum()),
                 'sum_p_static_best': float(p_best.sum()),
                 'theta_static':      float(theta_static_val),
+                'static_max_swaps':  int(static_max_swaps),
             }
 
             # ---- Per-firm rewire-event windows ---------------------------------

@@ -1,37 +1,38 @@
 #!/bin/bash
 #
-# Cost-reduction study with the OPTION-B "static gap" query enabled.
+# Cost-reduction study with the OPTION-B "static gap" query enabled, on the
+# THREE operating points used in panels (a, b) of
+# results/visibility/figure_visibility.png:
 #
-# Each trial now also computes, at its FINAL state:
-#   - p_current_i  = P[i] under the full GE at the final supplier configuration
-#   - p_best_static_i = min over ms-reachable single-firm swaps of P[i],
-#                       evaluated as a full-GE counterfactual with all other
-#                       firms held fixed
-#   - theta_static_i  = p_current_i - p_best_static_i
-#   - theta_static    = (sum p_current - sum p_best_static) / sum p_current
+#   R1 -- Full heterogeneity         : a~U[0.4,0.6], b~U[0.9,1.1],
+#                                      z~U[0.9,1.1], aisi=0.05, sigma_w=0.05
+#   R2 -- Firm-level heterogeneity   : same a/b/z, aisi=0,    sigma_w=0
+#   R3 -- Homogeneous DRS            : a=hom 0.5, b=hom 0.9, z=hom 1.0,
+#                                      aisi=0,    sigma_w=0
 #
-# In addition, per-firm rewire-event counts in three windows are written
-# (swaps_first_R, swaps_last_R, swaps_in_cycle) using trace=True. R defaults
-# to 10 (R_WINDOW in cost_reduction_study.py).
+# All at n=100, cc=4, ms=1, mode=limited.  Three tier cells per series:
 #
-# Cell grid (3 op-points x 5 tau cells = 15 cells):
-#   tau scan over: homo {0, 1, 2}, hetero {m=2 s=2, m=3 s=3}.
-# Op-points (same as launch_cost_reduction.sh):
-#   (A) old-paper baseline:  n=50, hom a/b/z, b=0.9, aisi=0, sw=0
-#   (B) realistic:           n=50, uniform a/b/z, aisi=0.05, sw=0
-#   (C) larger-n:            n=100, hom a/b/z, b=0.9, aisi=0, sw=0
+#   bar_tau = 0:  (tier_mean=0, tier_std=0)  -- homogeneous tau=0 (matches
+#                                               the leftmost point spliced
+#                                               into panel (b) at tau=0)
+#   bar_tau = 1:  (tier_mean=1, tier_std=1)  -- lognormal hetero (CV=1)
+#   bar_tau = 2:  (tier_mean=2, tier_std=2)  -- lognormal hetero (CV=1)
 #
+# Static-gap definition (in cost_reduction_study.py):
+#   p_best_static_i = min P[i] over candidate supplier sets reachable by up
+#     to static_max_swaps simultaneous swaps. Default static_max_swaps =
+#     min(c, cc) = 4, so the enumeration covers EVERY size-c subset of
+#     firm i's pool ("full visibility + unlimited swap").
+#
+# Cell grid: 3 series x 3 tier cells = 9 cells.
 # Sample budget per cell: TECH_PER_JOB=3 x INITS_PER_TECH=40 = 120 trials.
-# This is smaller than the 300/cell of launch_cost_reduction.sh because the
-# static-gap query is expensive (1 full-GE solve per candidate swap per firm
-# at the final state).
+# Output dir: results_cost_static/
 #
-# Output dir:  results_cost_static/   (separate from results_cost to avoid
-# confusion with the older runs that lacked the static-gap columns).
+# BASE_SEED default = 1500 (1400 was the previous ms-reachable-only schema).
 #
 # Usage:
-#     bash launch_cost_static.sh                  # 15 jobs, BASE_SEED=1400
-#     bash launch_cost_static.sh 1400 --dry-run
+#     bash launch_cost_static.sh                 # 9 jobs, BASE_SEED=1500
+#     bash launch_cost_static.sh 1500 --dry-run
 
 set -e
 
@@ -40,7 +41,7 @@ PYTHON_ENV="/projects/disruptsc/miniforge3/envs/rewiring"
 OUTPUT_DIR="${SCRIPT_DIR}/results_cost_static"
 SLURM_LOG_DIR="${SCRIPT_DIR}/slurm_logs"
 
-BASE_SEED=${1:-1400}
+BASE_SEED=${1:-1500}
 DRY_RUN=false
 shift || true
 while [[ $# -gt 0 ]]; do
@@ -60,15 +61,19 @@ NB_ROUNDS=200
 TECH_PER_JOB=${TECH_PER_JOB:-3}
 INITS_PER_TECH=${INITS_PER_TECH:-40}
 
+# Shared across all three series.
+N=100
+CC=4
+MS=1
+
 count=0
 submit() {
-    # n  cc  ms  aisi  sw  a_cfg  b_cfg  z_cfg  mode  tier_mean  tier_std  tag
-    local n=$1 cc=$2 ms=$3 aisi=$4 sw=$5
-    local a_cfg=$6 b_cfg=$7 z_cfg=$8
-    local mode=$9 tier_mean=${10} tier_std=${11} tag=${12}
+    # aisi  sw  a_cfg  b_cfg  z_cfg  tier_mean  tier_std  tag
+    local aisi=$1 sw=$2 a_cfg=$3 b_cfg=$4 z_cfg=$5
+    local tier_mean=$6 tier_std=$7 tag=$8
 
     count=$((count + 1))
-    local out="${OUTPUT_DIR}/coststat_n${n}_${tag}_seed${BASE_SEED}.csv"
+    local out="${OUTPUT_DIR}/coststat_n${N}_${tag}_seed${BASE_SEED}.csv"
     local job="coststat_${tag}_s${BASE_SEED}"
     local cmd="sbatch \
         --nodes=1 --time=${TIME_LIMIT} --mem=${MEM} --ntasks=1 \
@@ -76,59 +81,52 @@ submit() {
         --output=${SLURM_LOG_DIR}/${job}.%j.out \
         --wrap=\"bash -c 'source /projects/disruptsc/miniforge3/bin/activate ${PYTHON_ENV} && \
 python ${SCRIPT_DIR}/scripts/cost_reduction_study.py \
-    --n ${n} --cc ${cc} --max_swaps ${ms} \
+    --n ${N} --cc ${CC} --max_swaps ${MS} \
     --aisi_spread ${aisi} --sigma_w ${sw} \
     --a_config ${a_cfg} --b_config ${b_cfg} --z_config ${z_cfg} \
-    --mode ${mode} --tier_mean ${tier_mean} --tier_std ${tier_std} \
+    --mode limited --tier_mean ${tier_mean} --tier_std ${tier_std} \
     --tech_per_job ${TECH_PER_JOB} --inits_per_tech ${INITS_PER_TECH} \
     --nb_rounds ${NB_ROUNDS} \
     --base_seed ${BASE_SEED} --output ${out}'\""
 
     if $DRY_RUN; then
-        echo "[$count] n=${n} mode=${mode} tau=(${tier_mean},${tier_std}) tag=${tag}"
+        echo "[$count] tau=(${tier_mean},${tier_std})  tag=${tag}"
     else
         eval "$cmd"
         echo "[$count] queued: ${tag}"
     fi
 }
 
-submit_op_point() {
-    # n  cc  ms  aisi  sw  a_cfg  b_cfg  z_cfg  op_tag
-    local n=$1 cc=$2 ms=$3 aisi=$4 sw=$5
-    local a_cfg=$6 b_cfg=$7 z_cfg=$8 op_tag=$9
-
-    # Homogeneous tau scan (3 cells: tau in {0, 1, 2}).
-    for tau in 0 1 2; do
-        submit ${n} ${cc} ${ms} ${aisi} ${sw} "${a_cfg}" "${b_cfg}" "${z_cfg}" \
-               limited ${tau} 0 "${op_tag}_homo_t${tau}"
+submit_series() {
+    # aisi  sw  a_cfg  b_cfg  z_cfg  series_tag
+    local aisi=$1 sw=$2 a_cfg=$3 b_cfg=$4 z_cfg=$5 stag=$6
+    for m in 0 1 2; do
+        submit "${aisi}" "${sw}" "${a_cfg}" "${b_cfg}" "${z_cfg}" \
+               ${m} ${m} "${stag}_m${m}s${m}"
     done
-    # Heterogeneous tau (mean=std => coefficient of variation = 1).
-    submit ${n} ${cc} ${ms} ${aisi} ${sw} "${a_cfg}" "${b_cfg}" "${z_cfg}" \
-           limited 2 2 "${op_tag}_hetero_m2s2"
-    submit ${n} ${cc} ${ms} ${aisi} ${sw} "${a_cfg}" "${b_cfg}" "${z_cfg}" \
-           limited 3 3 "${op_tag}_hetero_m3s3"
 }
 
 # =============================================================================
-# Op-point A: old-paper baseline (n=50, fully hom, b=0.9, no AiSi, no sw)
+# R1: Full heterogeneity  (a~U[0.4,0.6], b~U[0.9,1.1], z~U[0.9,1.1],
+#                          aisi=0.05, sigma_w=0.05)
 # =============================================================================
-echo "=== Op-point A: old-paper baseline (n=50, b=hom 0.9, fully hom) ==="
-submit_op_point 50 4 1 0.0 0.0 \
-    homogeneous:0.5 homogeneous:0.9 homogeneous:1.0 "opA"
+echo "=== R1: Full heterogeneity ==="
+submit_series 0.05 0.05 \
+    uniform:0.4:0.6 uniform:0.9:1.1 uniform:0.9:1.1 "R1"
 
 # =============================================================================
-# Op-point B: realistic (n=50, uniform a/b/z, aisi=0.05)
+# R2: Firm-level heterogeneity only  (same a/b/z, aisi=0, sigma_w=0)
 # =============================================================================
-echo "=== Op-point B: realistic (n=50, uniform a/b/z, aisi=0.05) ==="
-submit_op_point 50 4 1 0.05 0.0 \
-    uniform:0.4:0.6 uniform:0.9:1.1 uniform:0.9:1.1 "opB"
+echo "=== R2: Firm-level heterogeneity only ==="
+submit_series 0.0 0.0 \
+    uniform:0.4:0.6 uniform:0.9:1.1 uniform:0.9:1.1 "R2"
 
 # =============================================================================
-# Op-point C: larger-n (n=100, hom a/b/z, b=0.9)
+# R3: Homogeneous DRS  (a=hom 0.5, b=hom 0.9, z=hom 1.0, aisi=0, sigma_w=0)
 # =============================================================================
-echo "=== Op-point C: larger-n (n=100, b=hom 0.9, fully hom) ==="
-submit_op_point 100 4 1 0.0 0.0 \
-    homogeneous:0.5 homogeneous:0.9 homogeneous:1.0 "opC"
+echo "=== R3: Homogeneous DRS ==="
+submit_series 0.0 0.0 \
+    homogeneous:0.5 homogeneous:0.9 homogeneous:1.0 "R3"
 
 echo
 echo "Done: $count jobs queued (BASE_SEED=${BASE_SEED}, "
