@@ -87,16 +87,23 @@ def _detect_period(state_history, max_period=MAX_CYCLE_PERIOD):
 # =============================================================================
 
 def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
-                           max_swaps=1, nb_rounds=None, tier=None, trace=False, console_print=False):
-    """Unified asynchronous rewiring simulation.
+                           max_swaps=1, nb_rounds=None, tier=None, trace=False, console_print=False,
+                           synchronous=False):
+    """Unified rewiring simulation.
 
     Common structure for all anticipation modes:
-    - Round = one permutation pass over firms.
+    - Round = one pass over firms.
     - Each firm evaluates all combinations up to max_swaps against its current
       supplier set, using a mode-specific cost function.
-    - If the best candidate strictly reduces the (mode-specific) cost, the swap
-      is applied IMMEDIATELY, the true GE is recomputed, and the next firm in
-      the permutation sees the updated state.
+    - In ASYNCHRONOUS mode (default, Gauss-Seidel; `synchronous=False`): firms
+      are visited in a random permutation; if the best candidate strictly
+      reduces the cost, the swap is applied IMMEDIATELY, the true GE is
+      recomputed, and the next firm sees the updated state.
+    - In SYNCHRONOUS mode (Jacobi; `synchronous=True`): every firm picks its
+      best swap against the frozen current GE; all accepted swaps are then
+      applied simultaneously at end-of-round and the GE is recomputed ONCE.
+      The trajectory is deterministic conditional on `(network_state, a, b, z)`
+      (no permutation; `seed` is ignored).
     - Convergence: no swaps during a full round.
 
     Mode differs only in the candidate-cost function:
@@ -216,52 +223,92 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
     initial_prices = eq['P'].copy()                # for cost-reduction analysis
     sum_p_history = [float(eq['P'].sum())]         # one entry per round (after that round)
     min_prices = eq['P'].copy()                    # element-wise running min
+    def _best_swap_for_firm(id_firm):
+        """Return (best_removes, best_adds) for firm id_firm against the
+        currently-frozen `supplier_id_list`, `W`, `eq` (read by `candidate_cost`).
+        Returns (None, None) if no strict improvement is found.
+        """
+        current_set = set(supplier_id_list[id_firm])
+        alternates = alternate_supplier_id_list[id_firm]
+        current_cost = candidate_cost(id_firm, current_set)
+        potential_cost = current_cost
+        best_removes, best_adds = None, None
+        for swap_size in range(1, max_swaps + 1):
+            if len(alternates) < swap_size or len(current_set) < swap_size:
+                continue
+            for new_sups in combinations(alternates, swap_size):
+                for old_sups in combinations(current_set, swap_size):
+                    new_set = (current_set - set(old_sups)) | set(new_sups)
+                    cost = candidate_cost(id_firm, new_set)
+                    if cost < potential_cost - EPSILON:
+                        potential_cost = cost
+                        best_removes, best_adds = list(old_sups), list(new_sups)
+        return best_removes, best_adds
+
+    def _apply_swap(id_firm, best_removes, best_adds):
+        """Move (old, new) pairs between supplier list and alternate list."""
+        for old_s, new_s in zip(best_removes, best_adds):
+            supplier_id_list[id_firm].remove(old_s)
+            supplier_id_list[id_firm].append(new_s)
+            alternate_supplier_id_list[id_firm].remove(new_s)
+            alternate_supplier_id_list[id_firm].append(old_s)
+        supplier_id_list[id_firm].sort()
+
     for r in range(1, _nb_rounds + 1):
         rewirings_this_round = 0
         max_swap_binding = False
 
-        for id_firm in np.random.permutation(n):
+        if synchronous:
+            # JACOBI: every firm decides against the frozen GE.
+            proposals = []
+            for id_firm in range(n):
+                best_removes, best_adds = _best_swap_for_firm(id_firm)
+                if best_adds is not None:
+                    proposals.append((id_firm, best_removes, best_adds))
+
+            # Apply all proposals simultaneously, then recompute GE once.
             t += 1
-            current_set = set(supplier_id_list[id_firm])
-            alternates = alternate_supplier_id_list[id_firm]
-
-            current_cost = candidate_cost(id_firm, current_set)
-            potential_cost = current_cost
-            best_removes, best_adds = None, None
-
-            for swap_size in range(1, max_swaps + 1):
-                if len(alternates) < swap_size or len(current_set) < swap_size:
-                    continue
-                for new_sups in combinations(alternates, swap_size):
-                    for old_sups in combinations(current_set, swap_size):
-                        new_set = (current_set - set(old_sups)) | set(new_sups)
-                        cost = candidate_cost(id_firm, new_set)
-                        if cost < potential_cost - EPSILON:
-                            potential_cost = cost
-                            best_removes, best_adds = list(old_sups), list(new_sups)
-
-            if best_adds is not None:
-                for old_s, new_s in zip(best_removes, best_adds):
-                    supplier_id_list[id_firm].remove(old_s)
-                    supplier_id_list[id_firm].append(new_s)
-                    alternate_supplier_id_list[id_firm].remove(new_s)
-                    alternate_supplier_id_list[id_firm].append(old_s)
-                supplier_id_list[id_firm].sort()
-
-                W = build_W_from_suppliers(supplier_id_list, Wbar)
-                adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
-                eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+            for (id_firm, best_removes, best_adds) in proposals:
+                _apply_swap(id_firm, best_removes, best_adds)
                 rewirings_this_round += len(best_adds)
                 total_rewirings += len(best_adds)
                 per_firm_swaps[id_firm] += 1
-                np.minimum(min_prices, eq['P'], out=min_prices)
                 if len(best_adds) == max_swaps:
                     max_swap_binding = True
                 if trace:
-                    trace_rewire_events.append({'t': t, 'round': r, 'firm': int(id_firm)})
+                    trace_rewire_events.append({'t': t, 'round': r,
+                                                'firm': int(id_firm)})
+            if proposals:
+                W = build_W_from_suppliers(supplier_id_list, Wbar)
+                adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
+                eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+                np.minimum(min_prices, eq['P'], out=min_prices)
+                if trace:
                     trace_prices.append(eq['P'].copy())
                     trace_price_steps.append(t)
                     trace_swap_edges.append(_edges_from_suppliers(supplier_id_list))
+        else:
+            # GAUSS-SEIDEL: random firm order, immediate per-swap GE update.
+            for id_firm in np.random.permutation(n):
+                t += 1
+                best_removes, best_adds = _best_swap_for_firm(id_firm)
+                if best_adds is not None:
+                    _apply_swap(id_firm, best_removes, best_adds)
+                    W = build_W_from_suppliers(supplier_id_list, Wbar)
+                    adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
+                    eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+                    rewirings_this_round += len(best_adds)
+                    total_rewirings += len(best_adds)
+                    per_firm_swaps[id_firm] += 1
+                    np.minimum(min_prices, eq['P'], out=min_prices)
+                    if len(best_adds) == max_swaps:
+                        max_swap_binding = True
+                    if trace:
+                        trace_rewire_events.append({'t': t, 'round': r,
+                                                    'firm': int(id_firm)})
+                        trace_prices.append(eq['P'].copy())
+                        trace_price_steps.append(t)
+                        trace_swap_edges.append(_edges_from_suppliers(supplier_id_list))
 
         sum_p_history.append(float(eq['P'].sum()))
         if trace:
