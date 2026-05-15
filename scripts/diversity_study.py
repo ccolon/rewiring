@@ -64,7 +64,9 @@ Z_CONFIG = {'mode': 'homogeneous', 'value': 1.0}
 # (boundary-conditioned partial-equilibrium evaluation, requires tier params).
 MODE = "full"
 TIER_MEAN = 0.0    # used only when MODE == "limited"; when TIER_STD == 0 the
-TIER_STD  = 0.0    # tier_arr is constant = round(TIER_MEAN); else lognormal.
+TIER_STD  = 0.0    # tier_arr is constant = round(TIER_MEAN); else drawn from
+                   # TIER_DIST (default: poisson).
+TIER_DIST = 'poisson'  # 'poisson' (default) or 'lognormal' (legacy).
 
 BASE_SEED = 0  # Monte Carlo offset; different values -> independent RNG streams
 
@@ -75,24 +77,27 @@ SERIES_FILTER = 'both'
 OUTPUT_FILE = "diversity_results.csv"
 
 
-def _build_tier_array(n, tier_mean, tier_std, rng):
-    """Return an int array of length n with the per-firm tier visibility.
+def _build_tier_array(n, tier_mean, tier_std, rng, tier_dist='poisson'):
+    """Per-firm tier array.
 
-    - If tier_std <= 0, returns a constant array = round(tier_mean).
-    - Else, draws lognormal values whose target mean and std equal the given
-      tier_mean and tier_std, then rounds to nearest non-negative integer.
+    Homogeneous (tier_std <= 0): constant array = round(tier_mean).
+    Heterogeneous (tier_std > 0):
+      tier_dist='poisson'  : tier_i ~ Poisson(lambda=tier_mean)  (default)
+      tier_dist='lognormal': tier_i ~ round(LogNormal) with target
+                              mean = tier_mean, std = tier_std  (legacy)
     """
     if tier_std <= 0:
         return np.full(n, int(round(tier_mean)), dtype=int)
-    # lognormal with desired mean mu and std sigma:
-    # underlying normal has variance log(1 + (sigma/mu)**2) and mean
-    # log(mu) - var/2 (assumes mu > 0).
     if tier_mean <= 0:
         return np.zeros(n, dtype=int)
-    var_n = np.log(1.0 + (tier_std / tier_mean) ** 2)
-    mean_n = np.log(tier_mean) - 0.5 * var_n
-    draws = rng.lognormal(mean=mean_n, sigma=np.sqrt(var_n), size=n)
-    return np.clip(np.round(draws), 0, None).astype(int)
+    if tier_dist == 'poisson':
+        return rng.poisson(lam=tier_mean, size=n).astype(int)
+    if tier_dist == 'lognormal':
+        var_n = np.log(1.0 + (tier_std / tier_mean) ** 2)
+        mean_n = np.log(tier_mean) - 0.5 * var_n
+        draws = rng.lognormal(mean=mean_n, sigma=np.sqrt(var_n), size=n)
+        return np.clip(np.round(draws), 0, None).astype(int)
+    raise ValueError(f"Unknown tier_dist={tier_dist!r}")
 
 
 # =============================================================================
@@ -147,7 +152,9 @@ CSV_FIELDNAMES = [
     # mode == "limited"). tier_mean and tier_std are the input distribution
     # parameters; each tech matrix's actual realised tier_arr is determined
     # by the tech_seed.
-    'mode', 'tier_mean', 'tier_std',
+    'mode', 'tier_mean', 'tier_std', 'tier_dist',
+    'U_T',  # aggregate household log-utility, -sum_i log(P_i),
+            # averaged across trials in this cell
     'base_seed', 'tech_seed',
 ]
 
@@ -231,7 +238,8 @@ def run_study():
             tier_arr = None
             if MODE in ("limited", "naive_limited"):
                 tier_rng = np.random.default_rng(tech_seed + 7919)  # +prime: avoid collision
-                tier_arr = _build_tier_array(n, TIER_MEAN, TIER_STD, tier_rng)
+                tier_arr = _build_tier_array(n, TIER_MEAN, TIER_STD, tier_rng,
+                                              tier_dist=TIER_DIST)
 
             common = {
                 'n': n, 'tech_idx': tech_idx,
@@ -243,6 +251,7 @@ def run_study():
                 'mode': MODE,
                 'tier_mean': TIER_MEAN,
                 'tier_std': TIER_STD,
+                'tier_dist': TIER_DIST if MODE in ("limited", "naive_limited") else '',
                 'base_seed': BASE_SEED,
                 'tech_seed': tech_seed,
             }
@@ -254,7 +263,7 @@ def run_study():
             # ------------------------------------------------------------------
             if blue_key not in existing_keys and SERIES_FILTER != 'dif_init_only':
                 t0 = time.time()
-                final_lists, rounds_list, conv_list, cycle_periods_list, rewires_list = [], [], [], [], []
+                final_lists, rounds_list, conv_list, cycle_periods_list, rewires_list, U_T_list = [], [], [], [], [], []
                 for trial in range(N_TRIALS):
                     result = run_unified_simulation(
                         base_state, a, b, z, mode=MODE,
@@ -268,6 +277,9 @@ def run_study():
                     conv_list.append(bool(result['converged']))
                     cycle_periods_list.append(result.get('cycle_period'))
                     rewires_list.append(int(result.get('total_rewirings', 0)))
+                    P_T = np.asarray(result.get('final_prices', []), dtype=float)
+                    P_T = P_T[P_T > 0]
+                    U_T_list.append(float(-np.sum(np.log(P_T))) if P_T.size else float('nan'))
 
                 diversity = compute_diversity(final_lists)
                 rewires_arr = np.asarray(rewires_list, dtype=float) / float(n)
@@ -279,7 +291,8 @@ def run_study():
                        'mean_rounds':          float(np.mean(rounds_list)),
                        'max_rounds':           int(np.max(rounds_list)),
                        'mean_swaps_per_firm':  float(np.mean(rewires_arr)),
-                       'max_swaps_per_firm':   float(np.max(rewires_arr))}
+                       'max_swaps_per_firm':   float(np.max(rewires_arr)),
+                       'U_T':                  float(np.nanmean(U_T_list))}
                 append_row(OUTPUT_FILE, row)
                 done += 1
                 elapsed = time.time() - t0
@@ -297,7 +310,7 @@ def run_study():
             # ------------------------------------------------------------------
             if red_key not in existing_keys and SERIES_FILTER != 'same_init_only':
                 t0 = time.time()
-                final_lists, rounds_list, conv_list, cycle_periods_list, rewires_list = [], [], [], [], []
+                final_lists, rounds_list, conv_list, cycle_periods_list, rewires_list, U_T_list = [], [], [], [], [], []
                 for trial in range(N_TRIALS):
                     trial_state = generate_random_initial_network(
                         n, Wbar, AiSi, seed=seed_off + 2000 + trial,
@@ -314,6 +327,9 @@ def run_study():
                     conv_list.append(bool(result['converged']))
                     cycle_periods_list.append(result.get('cycle_period'))
                     rewires_list.append(int(result.get('total_rewirings', 0)))
+                    P_T = np.asarray(result.get('final_prices', []), dtype=float)
+                    P_T = P_T[P_T > 0]
+                    U_T_list.append(float(-np.sum(np.log(P_T))) if P_T.size else float('nan'))
 
                 diversity = compute_diversity(final_lists)
                 rewires_arr = np.asarray(rewires_list, dtype=float) / float(n)
@@ -325,7 +341,8 @@ def run_study():
                        'mean_rounds':          float(np.mean(rounds_list)),
                        'max_rounds':           int(np.max(rounds_list)),
                        'mean_swaps_per_firm':  float(np.mean(rewires_arr)),
-                       'max_swaps_per_firm':   float(np.max(rewires_arr))}
+                       'max_swaps_per_firm':   float(np.max(rewires_arr)),
+                       'U_T':                  float(np.nanmean(U_T_list))}
                 append_row(OUTPUT_FILE, row)
                 done += 1
                 elapsed = time.time() - t0
@@ -377,7 +394,11 @@ def parse_args():
                         help='Mean tier visibility (used when mode=limited/naive_limited).')
     parser.add_argument('--tier_std', type=float, default=None,
                         help='Std tier visibility. 0 = homogeneous; >0 = '
-                             'lognormal heterogeneous draw per tech matrix.')
+                             'heterogeneous draw per tech matrix from --tier_dist.')
+    parser.add_argument('--tier_dist', type=str, default=None,
+                        choices=['poisson', 'lognormal'],
+                        help='Hetero-tau distribution (default: poisson; '
+                             'legacy: lognormal).')
     parser.add_argument('--base_seed', type=int, default=None,
                         help='Monte Carlo offset; different values give independent RNG streams')
     parser.add_argument('--series_filter', type=str, default=None,
@@ -421,6 +442,8 @@ if __name__ == "__main__":
         TIER_MEAN = args.tier_mean
     if args.tier_std is not None:
         TIER_STD = args.tier_std
+    if args.tier_dist is not None:
+        TIER_DIST = args.tier_dist
     if args.base_seed is not None:
         BASE_SEED = args.base_seed
     if args.series_filter is not None:

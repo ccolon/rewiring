@@ -58,9 +58,15 @@ Z_CONFIG = {'mode': 'uniform', 'min': 0.9, 'max': 1.1}
 # tau axis to sweep on each tech matrix.
 TAU_VALUES = [0, 1, 2, 3, 4, 5, 6]
 
-# Heterogeneity: 'homo' -> tier_arr = full(n, round(tau)).
-#                'hetero' -> tier_arr = lognormal(mean=tau, std=tau).
+# Heterogeneity: 'homo'   -> tier_arr = full(n, round(tau)).
+#                'hetero' -> tier_arr drawn from a per-firm distribution
+#                            controlled by TIER_DIST below.
 TAU_MODE = 'homo'
+
+# Hetero-tau distribution: 'poisson' -> Poisson(lambda = tau_mean) (new default).
+#                          'lognormal' -> legacy lognormal(mean=tau_mean,
+#                                                          std=tau_std).
+TIER_DIST = 'poisson'
 
 TECH_PER_JOB = 2
 BASE_SEED = 0          # Monte Carlo offset; unique tech_seed = BASE_SEED * 10000 + tech_idx.
@@ -72,21 +78,31 @@ OUTPUT_FILE = "visibility_results.csv"
 # TIER ARRAY HELPER
 # =============================================================================
 
-def build_tier_array(n, tier_mean, tier_std, rng):
+def build_tier_array(n, tier_mean, tier_std, rng, tier_dist='poisson'):
     """Return an int array of length n: tier visibility for each firm.
 
-    - tier_std <= 0  -> constant array = round(tier_mean).
-    - tier_std > 0   -> lognormal draws with target mean tier_mean and target
-                        std tier_std, rounded to nearest non-negative integer.
+    Homogeneous branch (tier_std <= 0): constant array = round(tier_mean),
+    regardless of tier_dist.
+
+    Heterogeneous branch (tier_std > 0):
+      tier_dist='poisson'  : tier_i ~ Poisson(lambda=tier_mean)  (new default)
+      tier_dist='lognormal': tier_i ~ round(LogNormal) with target
+                              mean = tier_mean, std = tier_std  (legacy)
+
+    For Poisson, tier_std is ignored (the std is automatically sqrt(lambda)).
     """
     if tier_std <= 0:
         return np.full(n, int(round(tier_mean)), dtype=int)
     if tier_mean <= 0:
         return np.zeros(n, dtype=int)
-    var_n = np.log(1.0 + (tier_std / tier_mean) ** 2)
-    mean_n = np.log(tier_mean) - 0.5 * var_n
-    draws = rng.lognormal(mean=mean_n, sigma=np.sqrt(var_n), size=n)
-    return np.clip(np.round(draws), 0, None).astype(int)
+    if tier_dist == 'poisson':
+        return rng.poisson(lam=tier_mean, size=n).astype(int)
+    if tier_dist == 'lognormal':
+        var_n = np.log(1.0 + (tier_std / tier_mean) ** 2)
+        mean_n = np.log(tier_mean) - 0.5 * var_n
+        draws = rng.lognormal(mean=mean_n, sigma=np.sqrt(var_n), size=n)
+        return np.clip(np.round(draws), 0, None).astype(int)
+    raise ValueError(f"Unknown tier_dist={tier_dist!r}")
 
 
 # =============================================================================
@@ -94,11 +110,12 @@ def build_tier_array(n, tier_mean, tier_std, rng):
 # =============================================================================
 
 CSV_FIELDNAMES = [
-    'n', 'tech_idx', 'tier_mean', 'tier_std', 'tau_mode',
+    'n', 'tech_idx', 'tier_mean', 'tier_std', 'tau_mode', 'tier_dist',
     # One sim per row, so frac_converged in {0, 1} (and frac_cycled in {0, 1}).
     # cycle_period: None = truncated; 1 = strict converge; 2..MAX_CYCLE_PERIOD = cycle.
     'converged', 'cycle_period', 'rounds', 'total_rewirings', 'swaps_per_firm',
     'final_utility', 'initial_utility',
+    'U_T',  # aggregate household log-utility at termination, -sum_i log(P_i)
     # Fixed parameters of the cell
     'c', 'cc', 'aisi_spread', 'sigma_w', 'max_swaps', 'nb_rounds',
     'a_config', 'b_config', 'z_config',
@@ -108,10 +125,9 @@ CSV_FIELDNAMES = [
 
 
 def load_existing_keys(filepath):
-    """Return set of (n, tech_idx, tier_mean, tier_std, tau_mode) rows already in CSV.
-
-    We use this 5-tuple as the resume key so a partial run can be safely
-    re-launched with the same BASE_SEED without redoing completed cells.
+    """Return set of (n, tech_idx, tier_mean, tier_std, tau_mode, tier_dist)
+    rows already in CSV. The resume key now includes tier_dist so re-runs
+    with a different distribution don't collide with old rows.
     """
     keys = set()
     if not os.path.exists(filepath):
@@ -125,6 +141,7 @@ def load_existing_keys(filepath):
                 float(row['tier_mean']),
                 float(row['tier_std']),
                 row['tau_mode'],
+                row.get('tier_dist', 'lognormal'),  # default for legacy CSVs
             ))
     return keys
 
@@ -147,7 +164,7 @@ def run_study():
     total_cells = TECH_PER_JOB * len(TAU_VALUES)
     done = 0
 
-    print(f"Visibility study  n={N}  tech_per_job={TECH_PER_JOB}  tau={TAU_VALUES}  tau_mode={TAU_MODE}")
+    print(f"Visibility study  n={N}  tech_per_job={TECH_PER_JOB}  tau={TAU_VALUES}  tau_mode={TAU_MODE}  tier_dist={TIER_DIST}")
     print(f"  Network : c={C}, cc={CC}, aisi_spread={AISI_SPREAD}, sigma_w={SIGMA_W}")
     print(f"  Economic: a={A_CONFIG}, b={B_CONFIG}, z={Z_CONFIG}")
     print(f"  Sim     : nb_rounds={NB_ROUNDS}, max_swaps={MAX_SWAPS}, mode=limited")
@@ -194,6 +211,7 @@ def run_study():
             'z_config': json.dumps(Z_CONFIG),
             'mode': 'limited',
             'tau_mode': TAU_MODE,
+            'tier_dist': TIER_DIST,
             'base_seed': BASE_SEED,
             'tech_seed': tech_seed,
         }
@@ -201,12 +219,13 @@ def run_study():
         for tau_idx, tau in enumerate(TAU_VALUES):
             tier_mean = float(tau)
             tier_std = float(tau) if TAU_MODE == 'hetero' else 0.0
-            key = (N, tech_idx, tier_mean, tier_std, TAU_MODE)
+            key = (N, tech_idx, tier_mean, tier_std, TAU_MODE, TIER_DIST)
             if key in existing:
                 done += 1
                 continue
 
-            tier_arr = build_tier_array(N, tier_mean, tier_std, tier_rng)
+            tier_arr = build_tier_array(N, tier_mean, tier_std, tier_rng,
+                                        tier_dist=TIER_DIST)
             perm_seed = tech_seed * 100 + tau_idx
 
             t0 = time.time()
@@ -220,6 +239,9 @@ def run_study():
             elapsed = time.time() - t0
 
             cycle_period = result.get('cycle_period')
+            P_T = np.asarray(result['final_prices'], dtype=float)
+            P_T_pos = P_T[P_T > 0]
+            U_T = float(-np.sum(np.log(P_T_pos))) if P_T_pos.size else float('nan')
             row = {
                 **common,
                 'tier_mean': tier_mean,
@@ -231,6 +253,7 @@ def run_study():
                 'swaps_per_firm':  float(int(result.get('total_rewirings', 0))) / float(N),
                 'final_utility':   float(result['final_utility']),
                 'initial_utility': float(result['initial_utility']),
+                'U_T':             U_T,
                 'perm_seed':       perm_seed,
             }
             append_row(OUTPUT_FILE, row)
@@ -282,7 +305,11 @@ def parse_args():
     parser.add_argument('--tau_mode', type=str, default=None,
                         choices=['homo', 'hetero'],
                         help='homo: tier_arr = full(n, tau).  '
-                             'hetero: lognormal mean=tau, std=tau.')
+                             'hetero: per-firm draw from --tier_dist.')
+    parser.add_argument('--tier_dist', type=str, default=None,
+                        choices=['poisson', 'lognormal'],
+                        help='Distribution used in hetero mode (default: '
+                             'poisson; legacy: lognormal).')
     parser.add_argument('--base_seed', type=int, default=None)
     parser.add_argument('--output', type=str, default=None)
     return parser.parse_args()
@@ -303,6 +330,7 @@ if __name__ == "__main__":
     if args.z_config is not None: Z_CONFIG = parse_config_arg(args.z_config)
     if args.tau_values is not None: TAU_VALUES = parse_tau_values(args.tau_values)
     if args.tau_mode is not None: TAU_MODE = args.tau_mode
+    if args.tier_dist is not None: TIER_DIST = args.tier_dist
     if args.base_seed is not None: BASE_SEED = args.base_seed
     if args.output is not None: OUTPUT_FILE = args.output
 

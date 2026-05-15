@@ -63,19 +63,43 @@ def _parse_param(s, n, rng):
     raise ValueError(f"Unknown param mode: {mode!r}")
 
 
-def _build_tier_array(n, tier_mean, tier_std, rng):
-    """Per-firm tier array. tier_std=0 -> homogeneous; >0 -> lognormal draw
-    with target mean tier_mean and target std tier_std (matches
-    visibility_study.build_tier_array).
+def _agg_log_utility(final_prices):
+    """Aggregate household log-utility at termination, U_T = -sum_i log(P_i).
+
+    NaN-safe: drops non-positive prices (defensive).
+    """
+    if final_prices is None:
+        return float('nan')
+    P = np.asarray(final_prices, dtype=float)
+    P = P[P > 0]
+    if P.size == 0:
+        return float('nan')
+    return float(-np.sum(np.log(P)))
+
+
+def _build_tier_array(n, tier_mean, tier_std, rng, tier_dist='poisson'):
+    """Per-firm tier array.
+
+    Homogeneous branch (tier_std <= 0): constant array = round(tier_mean),
+    regardless of tier_dist.
+
+    Heterogeneous branch (tier_std > 0):
+      tier_dist='poisson'  : tier_i ~ Poisson(lambda=tier_mean)  (new default)
+      tier_dist='lognormal': tier_i ~ round(LogNormal) with target
+                              mean = tier_mean, std = tier_std  (legacy)
     """
     if tier_std <= 0:
         return np.full(n, int(round(tier_mean)), dtype=int)
     if tier_mean <= 0:
         return np.zeros(n, dtype=int)
-    var_n = np.log(1.0 + (tier_std / tier_mean) ** 2)
-    mean_n = np.log(tier_mean) - 0.5 * var_n
-    draws = rng.lognormal(mean=mean_n, sigma=np.sqrt(var_n), size=n)
-    return np.clip(np.round(draws), 0, None).astype(int)
+    if tier_dist == 'poisson':
+        return rng.poisson(lam=tier_mean, size=n).astype(int)
+    if tier_dist == 'lognormal':
+        var_n = np.log(1.0 + (tier_std / tier_mean) ** 2)
+        mean_n = np.log(tier_mean) - 0.5 * var_n
+        draws = rng.lognormal(mean=mean_n, sigma=np.sqrt(var_n), size=n)
+        return np.clip(np.round(draws), 0, None).astype(int)
+    raise ValueError(f"Unknown tier_dist={tier_dist!r}")
 
 
 # -----------------------------------------------------------------------------
@@ -236,11 +260,12 @@ def aggregate_per_firm_events(rewire_events, n, rounds_run, cycle_period,
 
 TRIAL_COLS = [
     'n', 'cc', 'max_swaps', 'aisi_spread', 'sigma_w',
-    'mode', 'tier_mean', 'tier_std',
+    'mode', 'tier_mean', 'tier_std', 'tier_dist',
     'a_config', 'b_config', 'z_config',
     'tech_seed', 'init_seed',
     'rounds', 'cycle_period', 'converged', 'total_rewirings',
     'utility_init', 'utility_final',
+    'U_T',  # aggregate household log-utility at termination, -sum_i log(P_i)
     'sum_p_init', 'sum_p_final_window', 'sum_p_final_last', 'sum_p_min',
     'cycle_window_K',
     'theta_T_sum',          # (sum_p_init - sum_p_final_window) / sum_p_init
@@ -291,6 +316,7 @@ def build_trial_row(args, n, tier_arr, tech_seed, init_seed, result, costs,
         'mode': args.mode,
         'tier_mean': args.tier_mean if args.mode != 'full' else '',
         'tier_std': args.tier_std if args.mode != 'full' else '',
+        'tier_dist': args.tier_dist if args.mode != 'full' else '',
         'a_config': args.a_config,
         'b_config': args.b_config,
         'z_config': args.z_config,
@@ -302,6 +328,7 @@ def build_trial_row(args, n, tier_arr, tech_seed, init_seed, result, costs,
         'total_rewirings': result['total_rewirings'],
         'utility_init': result['initial_utility'],
         'utility_final': result['final_utility'],
+        'U_T': _agg_log_utility(result.get('final_prices')),
         'sum_p_init': costs['sum_p_init'],
         'sum_p_final_window': costs['sum_p_final_window'],
         'sum_p_final_last': costs['sum_p_final_last'],
@@ -432,9 +459,16 @@ def main():
     p.add_argument('--z_config', default='homogeneous:1.0')
     p.add_argument('--mode', choices=['limited', 'full'], default='limited')
     p.add_argument('--tier_mean', type=float, default=2.0,
-                   help='Mean tier visibility (ignored when mode=full).')
+                   help='Mean tier visibility (ignored when mode=full). For '
+                        'tier_dist=poisson this is lambda.')
     p.add_argument('--tier_std', type=float, default=0.0,
-                   help='Std tier visibility. 0 = homogeneous; >0 = lognormal hetero draw.')
+                   help='Std tier visibility. 0 = homogeneous; >0 = hetero. '
+                        'Ignored numerically for tier_dist=poisson but kept '
+                        'as the hetero flag.')
+    p.add_argument('--tier_dist', type=str, default='poisson',
+                   choices=['poisson', 'lognormal'],
+                   help='Hetero-tau distribution (default: poisson; legacy: '
+                        'lognormal).')
     p.add_argument('--tech_per_job', type=int, default=5)
     p.add_argument('--inits_per_tech', type=int, default=30,
                    help='Random initial networks per tech matrix.')
@@ -516,7 +550,8 @@ def main():
             # cleaner Monte Carlo (otherwise the same tier_i pattern persists across
             # trials sharing a tech matrix). Set seed for reproducibility.
             tier_rng = np.random.default_rng((init_seed + 7919) % SEED_MOD)
-            tier_arr = _build_tier_array(n, args.tier_mean, args.tier_std, tier_rng)
+            tier_arr = _build_tier_array(n, args.tier_mean, args.tier_std,
+                                          tier_rng, tier_dist=args.tier_dist)
 
             kwargs = dict(
                 a=a_arr, b=b_arr, z=z_arr,

@@ -219,6 +219,19 @@ def render_figure(bundle, out_path_prefix, left_metric="rewirings"):
     cfg = bundle["cfg"]
     cells = bundle["cells"]
 
+    # Map ms_label ('low'/'full') -> kappa value, from the sweep config when
+    # available; fallback to (1, 4).
+    ms_to_kappa = {'low': 1, 'full': 4}
+    for entry in cfg.get('cells', []):
+        name = entry.get('name', '')
+        ms = entry.get('max_swaps')
+        if ms is None:
+            continue
+        if name.endswith('_low'):
+            ms_to_kappa['low'] = ms
+        elif name.endswith('_full'):
+            ms_to_kappa['full'] = ms
+
     if left_metric == "rewirings":
         left_key = "churn_per_seed"
         left_ylabel = "rewirings per round"
@@ -281,7 +294,8 @@ def render_figure(bundle, out_path_prefix, left_metric="rewirings"):
         if row == 0:
             ax.set_title(COL_TITLES[b_label], fontsize=10)
         if col == 0:
-            ax.set_ylabel(f"max_swaps = {'2' if ms_label=='low' else '4'}\n"
+            kappa_val = ms_to_kappa[ms_label]
+            ax.set_ylabel(rf"$\kappa = {kappa_val}$" "\n"
                           f"{left_ylabel}", fontsize=9)
         if row == 1:
             ax.set_xlabel("round t")
@@ -302,11 +316,7 @@ def render_figure(bundle, out_path_prefix, left_metric="rewirings"):
     fig.legend(handles=handles, loc="lower center", ncol=5,
                bbox_to_anchor=(0.5, -0.03), frameon=False, fontsize=9)
 
-    fig.suptitle(
-        f"AA simulation time series "
-        f"(n={cfg['N']}, cc={cfg['cc']}, S={cfg['seeds']} seeds)",
-        fontsize=11,
-    )
+    # No suptitle (per user spec).
 
     for ext in ("pdf", "png"):
         out = f"{out_path_prefix}.{ext}"

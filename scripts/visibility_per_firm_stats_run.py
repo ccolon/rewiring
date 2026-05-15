@@ -86,21 +86,36 @@ def _parse_param(s, n, rng):
     raise ValueError(f"Unknown param spec: {s}")
 
 
-def _build_tier_array(n, tier_mean, tier_std, rng):
-    """Lognormal with target mean and std (matches visibility_study)."""
+def _build_tier_array(n, tier_mean, tier_std, rng, tier_dist='poisson'):
+    """Per-firm tier array (matches visibility_study).
+
+    Homogeneous (tier_std <= 0): constant array = round(tier_mean).
+    Heterogeneous (tier_std > 0):
+      tier_dist='poisson'  : tier_i ~ Poisson(lambda=tier_mean)  (default)
+      tier_dist='lognormal': legacy lognormal with target mean=tier_mean,
+                              std=tier_std
+    """
     if tier_std <= 0:
         return np.full(n, int(round(tier_mean)), dtype=int)
     if tier_mean <= 0:
         return np.zeros(n, dtype=int)
-    var_n = np.log(1.0 + (tier_std / tier_mean) ** 2)
-    mean_n = np.log(tier_mean) - 0.5 * var_n
-    draws = rng.lognormal(mean=mean_n, sigma=np.sqrt(var_n), size=n)
-    return np.clip(np.round(draws), 0, None).astype(int)
+    if tier_dist == 'poisson':
+        return rng.poisson(lam=tier_mean, size=n).astype(int)
+    if tier_dist == 'lognormal':
+        var_n = np.log(1.0 + (tier_std / tier_mean) ** 2)
+        mean_n = np.log(tier_mean) - 0.5 * var_n
+        draws = rng.lognormal(mean=mean_n, sigma=np.sqrt(var_n), size=n)
+        return np.clip(np.round(draws), 0, None).astype(int)
+    raise ValueError(f"Unknown tier_dist={tier_dist!r}")
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--base_seed', type=int, default=5000)
+    p.add_argument('--tier_dist', type=str, default='poisson',
+                   choices=['poisson', 'lognormal'],
+                   help='Hetero-tau distribution (default: poisson; legacy: '
+                        'lognormal).')
     p.add_argument('--output', type=str, default=None,
                    help='Output pickle path (default: results/visibility_per_firm_stats.pkl)')
     args = p.parse_args()
@@ -139,6 +154,7 @@ def main():
             )
             tier_arr = _build_tier_array(
                 N, tm, ts, np.random.default_rng(tier_seed),
+                tier_dist=args.tier_dist,
             )
 
             t0 = time.time()

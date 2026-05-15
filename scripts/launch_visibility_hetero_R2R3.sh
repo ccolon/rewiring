@@ -16,10 +16,13 @@
 # 100 tech matrices per cell, 7 tau levels each = 700 sims per job. Comparable
 # to the existing R1 hetero coverage (~107 trials per (tau_mean, tau_std)).
 #
+# Hetero distribution: Poisson(lambda = bar_tau). BASE_SEED bumped to 960+
+# so the new Poisson CSVs are distinguishable from prior lognormal ones.
+#
 # Usage:
-#     bash launch_visibility_hetero_R2R3.sh                 # 4 jobs, BASE_SEED 940-941
-#     bash launch_visibility_hetero_R2R3.sh 940 --dry-run
-#     bash launch_visibility_hetero_R2R3.sh 942 --num-batches 4  # +200 more tech/cell
+#     bash launch_visibility_hetero_R2R3.sh                 # 4 jobs, BASE_SEED 960-961
+#     bash launch_visibility_hetero_R2R3.sh 960 --dry-run
+#     bash launch_visibility_hetero_R2R3.sh 962 --num-batches 4  # +200 more tech/cell
 
 set -e
 
@@ -28,7 +31,7 @@ PYTHON_ENV="/projects/disruptsc/miniforge3/envs/rewiring"
 OUTPUT_DIR="${SCRIPT_DIR}/results_sweep"
 SLURM_LOG_DIR="${SCRIPT_DIR}/slurm_logs"
 
-BASE_SEED_START=${1:-940}
+BASE_SEED_START=${1:-960}
 DRY_RUN=false
 NUM_BATCHES=2
 shift || true
@@ -73,6 +76,7 @@ python ${SCRIPT_DIR}/scripts/visibility_study.py \
     --aisi_spread 0.0 --sigma_w 0.0 \
     --a_config ${a_cfg} --b_config ${b_cfg} --z_config ${z_cfg} \
     --tau_values ${TAU_VALUES} --tau_mode hetero \
+    --tier_dist poisson \
     --base_seed ${seed} --output ${out}'\""
 
         if $DRY_RUN; then

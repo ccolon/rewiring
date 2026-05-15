@@ -24,15 +24,19 @@
 #     min(c, cc) = 4, so the enumeration covers EVERY size-c subset of
 #     firm i's pool ("full visibility + unlimited swap").
 #
-# Cell grid: 3 series x 3 tier cells = 9 cells.
+# Hetero distribution: Poisson(lambda = bar_tau). Cell tag uses lam{m}
+# to reflect the single-parameter family.
+#
+# Cell grid: 3 series x 3 tier cells (lam in {0, 1, 2}) = 9 cells.
 # Sample budget per cell: TECH_PER_JOB=3 x INITS_PER_TECH=40 = 120 trials.
 # Output dir: results_cost_static/
 #
-# BASE_SEED default = 1500 (1400 was the previous ms-reachable-only schema).
+# BASE_SEED default = 1600 (1500 was the lognormal-hetero generation;
+# 1400 was the ms-reachable-only schema).
 #
 # Usage:
-#     bash launch_cost_static.sh                 # 9 jobs, BASE_SEED=1500
-#     bash launch_cost_static.sh 1500 --dry-run
+#     bash launch_cost_static.sh                 # 9 jobs, BASE_SEED=1600
+#     bash launch_cost_static.sh 1600 --dry-run
 
 set -e
 
@@ -41,7 +45,7 @@ PYTHON_ENV="/projects/disruptsc/miniforge3/envs/rewiring"
 OUTPUT_DIR="${SCRIPT_DIR}/results_cost_static"
 SLURM_LOG_DIR="${SCRIPT_DIR}/slurm_logs"
 
-BASE_SEED=${1:-1500}
+BASE_SEED=${1:-1600}
 DRY_RUN=false
 shift || true
 while [[ $# -gt 0 ]]; do
@@ -85,6 +89,7 @@ python ${SCRIPT_DIR}/scripts/cost_reduction_study.py \
     --aisi_spread ${aisi} --sigma_w ${sw} \
     --a_config ${a_cfg} --b_config ${b_cfg} --z_config ${z_cfg} \
     --mode limited --tier_mean ${tier_mean} --tier_std ${tier_std} \
+    --tier_dist poisson \
     --tech_per_job ${TECH_PER_JOB} --inits_per_tech ${INITS_PER_TECH} \
     --nb_rounds ${NB_ROUNDS} \
     --base_seed ${BASE_SEED} --output ${out}'\""
@@ -100,9 +105,12 @@ python ${SCRIPT_DIR}/scripts/cost_reduction_study.py \
 submit_series() {
     # aisi  sw  a_cfg  b_cfg  z_cfg  series_tag
     local aisi=$1 sw=$2 a_cfg=$3 b_cfg=$4 z_cfg=$5 stag=$6
-    for m in 0 1 2; do
+    # Cell loop in Poisson lambda. tier_std is passed as a non-zero sentinel
+    # (= lambda) so the simulator takes the hetero branch; the Poisson
+    # branch ignores its numerical value.
+    for lam in 0 1 2; do
         submit "${aisi}" "${sw}" "${a_cfg}" "${b_cfg}" "${z_cfg}" \
-               ${m} ${m} "${stag}_m${m}s${m}"
+               ${lam} ${lam} "${stag}_lam${lam}"
     done
 }
 

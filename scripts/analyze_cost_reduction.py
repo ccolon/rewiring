@@ -259,7 +259,7 @@ def fig_cost_gap_2panel(trials, save_path):
     axes[0].grid(alpha=0.3)
     axes[0].axhline(0, color='black', lw=0.6, alpha=0.4)
 
-    axes[1].set_title(r'(b) Heterogeneous $\tau$ (lognormal, std = mean)',
+    axes[1].set_title(r'(b) Heterogeneous $\tau$ ($\mathrm{Poisson}(\bar\tau)$)',
                       loc='left')
     axes[1].set_xlabel(r'Mean tier visibility $\bar{\tau}$')
     axes[1].set_xticks([0, 1, 2, 3, 4, 5, 6])

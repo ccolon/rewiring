@@ -319,7 +319,7 @@ def main():
 
     # Right: heterogeneous tau, R1 spliced with homo tau=0
     plot_panel(axes[1], df, tau_mode='hetero',
-               title=r'(b) Heterogeneous $\tau$ (lognormal, std = mean)',
+               title=r'(b) Heterogeneous $\tau$ ($\mathrm{Poisson}(\bar\tau)$)',
                x_label=r'Mean tier visibility $\bar{\tau}$',
                series_ids=['R1', 'R2', 'R3'])
 

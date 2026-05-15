@@ -17,11 +17,13 @@
 # To top up to 100 tech matrices per cell, re-launch later with a higher
 # BASE_SEED_START and NUM_BATCHES=45 (or whatever you need).
 #
+# Hetero distribution: Poisson(lambda = bar_tau). BASE_SEED bumped to 950+
+# so the new Poisson CSVs don't collide with the old lognormal ones.
+#
 # Usage:
-#     bash launch_visibility.sh                             # 30 jobs, BASE_SEED 600-604
-#     bash launch_visibility.sh 600 --dry-run               # print only
-#     bash launch_visibility.sh 605 --num-batches 45        # top-up: 90 more tech matrices
-#     bash launch_visibility.sh 605 --num-batches 45 --dry-run
+#     bash launch_visibility.sh                             # 30 jobs, BASE_SEED 950-954
+#     bash launch_visibility.sh 950 --dry-run               # print only
+#     bash launch_visibility.sh 955 --num-batches 45        # top-up
 
 set -e
 
@@ -30,7 +32,7 @@ PYTHON_ENV="/projects/disruptsc/miniforge3/envs/rewiring"
 OUTPUT_DIR="${SCRIPT_DIR}/results_sweep"
 SLURM_LOG_DIR="${SCRIPT_DIR}/slurm_logs"
 
-BASE_SEED_START=${1:-600}
+BASE_SEED_START=${1:-950}
 DRY_RUN=false
 NUM_BATCHES=5
 shift || true   # consume the BASE_SEED_START arg if present
@@ -81,6 +83,7 @@ python ${SCRIPT_DIR}/scripts/visibility_study.py \
     --aisi_spread ${AISI} --sigma_w ${SW} \
     --a_config ${A_CONFIG} --b_config ${B_CONFIG} --z_config ${Z_CONFIG} \
     --tau_values ${TAU_VALUES} --tau_mode ${tau_mode} \
+    --tier_dist poisson \
     --base_seed ${seed} --output ${out}'\""
 
         if $DRY_RUN; then
