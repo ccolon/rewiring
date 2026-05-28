@@ -88,7 +88,7 @@ def _detect_period(state_history, max_period=MAX_CYCLE_PERIOD):
 
 def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
                            max_swaps=1, nb_rounds=None, tier=None, trace=False, console_print=False,
-                           synchronous=False):
+                           synchronous=False, detect_cycles=True, chi=0.0):
     """Unified rewiring simulation.
 
     Common structure for all anticipation modes:
@@ -125,6 +125,11 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         tier: int or np.ndarray of length n. Required for 'limited' / 'naive_limited'.
         trace: if True, attach a `trace` dict to the result with per-round scalars,
                edge snapshots, per-step prices, and rewire events.
+        chi: per-switch cost hurdle (default 0). A candidate that changes m
+             active links is accepted only if its anticipated cost falls below
+             (1 - m * chi) * current_cost. chi=0 recovers the strict-improvement
+             baseline. The hurdle stacks linearly with the number of swaps m
+             (relevant only when max_swaps > 1).
     """
     if mode not in ("aa", "full", "limited", "naive_limited"):
         raise ValueError(
@@ -226,7 +231,12 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
     def _best_swap_for_firm(id_firm):
         """Return (best_removes, best_adds) for firm id_firm against the
         currently-frozen `supplier_id_list`, `W`, `eq` (read by `candidate_cost`).
-        Returns (None, None) if no strict improvement is found.
+        Returns (None, None) if no candidate clears the chi-hurdle.
+
+        Acceptance test: a candidate with m simultaneous swaps must satisfy
+            cost < (1 - m * chi) * current_cost - EPSILON
+        AND beat the best candidate so far. At chi=0 the hurdle collapses to
+        the strict-improvement baseline.
         """
         current_set = set(supplier_id_list[id_firm])
         alternates = alternate_supplier_id_list[id_firm]
@@ -236,11 +246,12 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         for swap_size in range(1, max_swaps + 1):
             if len(alternates) < swap_size or len(current_set) < swap_size:
                 continue
+            hurdle = (1.0 - chi * swap_size) * current_cost
             for new_sups in combinations(alternates, swap_size):
                 for old_sups in combinations(current_set, swap_size):
                     new_set = (current_set - set(old_sups)) | set(new_sups)
                     cost = candidate_cost(id_firm, new_set)
-                    if cost < potential_cost - EPSILON:
+                    if cost < hurdle - EPSILON and cost < potential_cost - EPSILON:
                         potential_cost = cost
                         best_removes, best_adds = list(old_sups), list(new_sups)
         return best_removes, best_adds
@@ -337,12 +348,13 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
 
         # Period-k limit cycle (k in [2, MAX_CYCLE_PERIOD]).
         state_history.append(_state_signature(supplier_id_list))
-        detected = _detect_period(state_history, max_period=MAX_CYCLE_PERIOD)
-        if detected is not None:
-            cycle_period = detected
-            if trace:
-                converged_at = r
-            break
+        if detect_cycles:
+            detected = _detect_period(state_history, max_period=MAX_CYCLE_PERIOD)
+            if detected is not None:
+                cycle_period = detected
+                if trace:
+                    converged_at = r
+                break
 
     if trace:
         # Anchor the last observation at the final step so the price trajectory
@@ -369,6 +381,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         'per_firm_swaps': per_firm_swaps,
         'final_supplier_list': supplier_id_list,
         'mode': mode,
+        'chi': float(chi),
     }
     if trace:
         result['trace'] = {
