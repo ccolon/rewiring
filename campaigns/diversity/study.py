@@ -32,8 +32,10 @@ import time
 
 import numpy as np
 
-# Allow `python scripts/diversity_study.py` from the repo root
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
+# Allow `python campaigns/diversity/study.py` from anywhere. This script lives
+# 2 levels below the repo root.
+sys.path.insert(0, os.path.abspath(os.path.join(
+    os.path.dirname(__file__), os.pardir, os.pardir)))
 
 from rewiring.networks import generate_base_network, generate_random_initial_network
 from rewiring.parameters import generate_a_parameter, generate_parameter

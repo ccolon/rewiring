@@ -3,7 +3,7 @@ Sweep driver for the (b, max_swaps) small-multiples figure.
 
 Runs `run_unified_simulation` in mode='aa' across 8 cells
 (4 b-regimes x 2 max_swaps settings) and S seeds, dumping per-run traces
-for later aggregation by b_ms_sweep_analyze.py.
+for later aggregation by campaigns/aa_b_kappa/analyze.py.
 
 Output layout:
     sweeps/b_ms/<cell>/seed=<s>/
@@ -24,8 +24,10 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-# Allow `python scripts/b_ms_sweep.py` from the repo root
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
+# Allow `python campaigns/aa_b_kappa/study.py` from the repo root. The script
+# lives at campaigns/aa_b_kappa/, so REPO_ROOT is 3 levels up.
+sys.path.insert(0, os.path.abspath(os.path.join(
+    os.path.dirname(__file__), os.pardir, os.pardir)))
 
 from rewiring.networks import generate_base_network, generate_random_initial_network
 from rewiring.parameters import generate_a_parameter, generate_parameter

@@ -29,7 +29,10 @@ set -e
 
 SCRIPT_DIR="/projects/disruptsc/rewiring_vAA"
 PYTHON_ENV="/projects/disruptsc/miniforge3/envs/rewiring"
-OUTPUT_DIR="${SCRIPT_DIR}/results_welfare"
+# CSVs land flat in results/welfare_dispersion/ (gitignored). The final table
+# tab_welfare_dispersion.tex lands here too once campaigns/welfare_dispersion/analyze.py
+# is invoked.
+OUTPUT_DIR="${SCRIPT_DIR}/results/welfare_dispersion"
 SLURM_LOG_DIR="${SCRIPT_DIR}/slurm_logs"
 
 BASE_SEED_START=${1:-1700}
@@ -68,7 +71,7 @@ for point in "${POINTS[@]}"; do
             --job-name=${job} \
             --output=${SLURM_LOG_DIR}/${job}.%j.out \
             --wrap=\"bash -c 'source /projects/disruptsc/miniforge3/bin/activate ${PYTHON_ENV} && \
-python ${SCRIPT_DIR}/scripts/welfare_dispersion_study.py \
+python ${SCRIPT_DIR}/campaigns/welfare_dispersion/study.py \
     --point ${point} \
     --tech_per_job ${TECH_PER_JOB} --inits_per_tech ${INITS_PER_TECH} \
     --nb_rounds ${NB_ROUNDS} \

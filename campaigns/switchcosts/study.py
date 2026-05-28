@@ -35,11 +35,6 @@ import numpy as np
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
-# welfare_dispersion_study.py lives in scripts/ -- add it to sys.path so the
-# POINTS import resolves regardless of cwd.
-SCRIPTS_DIR = os.path.join(REPO_ROOT, 'scripts')
-if SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, SCRIPTS_DIR)
 
 from rewiring.equilibrium import compute_static_gap
 from rewiring.networks import (
@@ -48,11 +43,10 @@ from rewiring.networks import (
 )
 from rewiring.simulation import run_unified_simulation
 
-# Single source of truth for parameter points: reuse welfare_dispersion_study.py.
-# The switchcost figure runs only P2 / P3 / P4 -- P0 and P1 are skipped (P0 is
-# the AA control, P1 is the no-friction degenerate point). Labels follow the
-# welfare-dispersion convention.
-from welfare_dispersion_study import POINTS as WELFARE_POINTS
+# Single source of truth for parameter points: reuse the welfare-dispersion
+# campaign. The switchcost figure runs only P2 / P3 / P4 -- P0 and P1 are
+# skipped (P0 is the AA control, P1 is the no-friction degenerate point).
+from campaigns.welfare_dispersion.study import POINTS as WELFARE_POINTS
 
 SWITCHCOST_POINTS = {k: WELFARE_POINTS[k] for k in ('P2', 'P3', 'P4')}
 

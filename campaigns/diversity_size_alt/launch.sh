@@ -33,15 +33,17 @@
 # of operating points before this campaign's figure can be rendered).
 #
 # Usage:
-#     bash launch_diversity_size_alt.sh                 # 180 jobs (n up to 500)
-#     bash launch_diversity_size_alt.sh 2000 --dry-run
-#     bash launch_diversity_size_alt.sh 2000 --max-n 200    # 150 jobs (drop n=500)
+#     bash campaigns/diversity_size_alt/launch.sh                 # 180 jobs (n up to 500)
+#     bash campaigns/diversity_size_alt/launch.sh 2000 --dry-run
+#     bash campaigns/diversity_size_alt/launch.sh 2000 --max-n 200    # 150 jobs (drop n=500)
 
 set -e
 
 SCRIPT_DIR="/projects/disruptsc/rewiring_vAA"
 PYTHON_ENV="/projects/disruptsc/miniforge3/envs/rewiring"
-OUTPUT_DIR="${SCRIPT_DIR}/results_diversity_size_alt"
+# CSVs land flat in results/diversity_size_alt/ (gitignored). The final figure
+# lands here too once campaigns/diversity_size_alt/plot.py is invoked.
+OUTPUT_DIR="${SCRIPT_DIR}/results/diversity_size_alt"
 SLURM_LOG_DIR="${SCRIPT_DIR}/slurm_logs"
 
 BASE_SEED_START=${1:-2000}
@@ -102,7 +104,7 @@ for entry in "${SERIES[@]}"; do
                 --job-name=${job} \
                 --output=${SLURM_LOG_DIR}/${job}.%j.out \
                 --wrap=\"bash -c 'source /projects/disruptsc/miniforge3/bin/activate ${PYTHON_ENV} && \
-python ${SCRIPT_DIR}/scripts/diversity_study.py \
+python ${SCRIPT_DIR}/campaigns/diversity/study.py \
     --n_min ${n} --n_max ${n} \
     --n_tech ${TECH_PER_JOB} --n_trials ${INITS_PER_TECH} \
     --nb_rounds ${NB_ROUNDS} \

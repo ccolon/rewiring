@@ -8,18 +8,19 @@
 # SLURM job covers it. The user can split with --n_pairs into batches if
 # more parallelism is desired (not the default).
 #
-# Output dir: results_sync_async/  (drop into results/sync_async/ locally)
+# Output dir: results/sync_async/ (gitignored). The final figure sync_async.png
+# lands here too once campaigns/sync_async/plot.py is invoked.
 # BASE_SEED default = 1800.
 #
 # Usage:
-#     bash launch_sync_async.sh                 # 1 job, BASE_SEED=1800
-#     bash launch_sync_async.sh 1800 --dry-run
+#     bash campaigns/sync_async/launch.sh                 # 1 job, BASE_SEED=1800
+#     bash campaigns/sync_async/launch.sh 1800 --dry-run
 
 set -e
 
 SCRIPT_DIR="/projects/disruptsc/rewiring_vAA"
 PYTHON_ENV="/projects/disruptsc/miniforge3/envs/rewiring"
-OUTPUT_DIR="${SCRIPT_DIR}/results_sync_async"
+OUTPUT_DIR="${SCRIPT_DIR}/results/sync_async"
 SLURM_LOG_DIR="${SCRIPT_DIR}/slurm_logs"
 
 BASE_SEED=${1:-1800}
@@ -49,7 +50,7 @@ cmd="sbatch \
     --job-name=${job} \
     --output=${SLURM_LOG_DIR}/${job}.%j.out \
     --wrap=\"bash -c 'source /projects/disruptsc/miniforge3/bin/activate ${PYTHON_ENV} && \
-python ${SCRIPT_DIR}/scripts/sync_async_study.py \
+python ${SCRIPT_DIR}/campaigns/sync_async/study.py \
     --n_pairs ${N_PAIRS} --n_async ${N_ASYNC} \
     --nb_rounds ${NB_ROUNDS} \
     --base_seed ${BASE_SEED} --output ${out}'\""
