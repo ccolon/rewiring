@@ -194,6 +194,28 @@ def _idx_of_config(edge_set, edges_list, prefer='last'):
     return None
 
 
+def build_cumulative_unique(coords, decimals=6):
+    """Monotone count of distinct configurations seen up to each visit.
+
+    Inputs:
+      coords: (N, 2) MDS coordinates -- distinct configurations map to
+              distinct MDS positions (modulo numerical noise; rounded to
+              `decimals` digits to absorb roundoff).
+
+    Returns a length-N int array `cum_uniq` where `cum_uniq[k]` is the
+    count of distinct rounded coords in `coords[:k+1]`.
+    """
+    if len(coords) == 0:
+        return np.zeros(0, dtype=int)
+    rounded = np.round(coords, decimals)
+    seen = set()
+    cum = np.empty(len(rounded), dtype=int)
+    for k, row in enumerate(map(tuple, rounded)):
+        seen.add(row)
+        cum[k] = len(seen)
+    return cum
+
+
 def build_rolling_event_count(events, t_max, window, n_bins=400):
     """Aggregate (across-firm) rolling count of rewire events.
 
@@ -291,7 +313,7 @@ def run(args):
 PLOT_DATA_VERSION = 1
 
 
-def build_plot_data(payload, ma_window=None):
+def build_plot_data(payload, ma_window=None, cycle_max_period=10):
     """Distil everything `render_figure` needs from a full simulation payload.
 
     Does the heavy work once (consecutive-dedup, pairwise edge-distance
@@ -302,6 +324,9 @@ def build_plot_data(payload, ma_window=None):
     `ma_window` is just stored on the side; the heatmap itself is
     rebuilt cheaply from `events` inside `render_figure`, so changing the
     window at replot time stays in the fast path.
+
+    `cycle_max_period` is the largest period the post-hoc round-level
+    cycle detector will search for.
     """
     result = payload['result']
     trace = result['trace']
@@ -319,7 +344,8 @@ def build_plot_data(payload, ma_window=None):
     cycle_positions = []
     if not is_fixed_point:
         round_edges = trace.get('edges', [])
-        cycle_period = detect_round_cycle_period(round_edges, max_period=10)
+        cycle_period = detect_round_cycle_period(
+            round_edges, max_period=int(cycle_max_period))
         if cycle_period is not None:
             for round_state in round_edges[-cycle_period:]:
                 idx = _idx_of_config(edges_to_set(round_state),
@@ -369,7 +395,40 @@ def render_figure(plot_data, save_path):
         ax_re  = fig.add_subplot(left[1], sharex=ax_ts)
         ax_mds = fig.add_subplot(outer[1])
 
-        # ---------- (a) Distance TS ----------
+        # ---------- (a) Distance TS + cumulative unique-config background ----
+        # Background: monotone count of distinct configurations visited up
+        # to time t, drawn as a filled curve on a twin right-side axis
+        # (no scale shown). Flat tail = low-dim attractor; sustained slope
+        # = ongoing exploration / drift.
+        cum_uniq = build_cumulative_unique(coords)
+
+        ax_ts_bg = ax_ts.twinx()
+        # Twin axis behind main so the distance line and markers stay on top.
+        ax_ts.set_zorder(ax_ts_bg.get_zorder() + 1)
+        ax_ts.patch.set_visible(False)
+
+        FILL_COLOR = '#ff8c69'  # salmon -- shared with panel (b)
+        LINE_COLOR = '#c14b2a'  # deeper salmon
+        if cum_uniq.size and cum_uniq[-1] > 0:
+            ax_ts_bg.fill_between(ts, 0, cum_uniq, step='post',
+                                  color=FILL_COLOR, alpha=0.30,
+                                  linewidth=0, zorder=1)
+            ax_ts_bg.plot(ts, cum_uniq, drawstyle='steps-post',
+                          color=LINE_COLOR, lw=1.2, alpha=0.85, zorder=1)
+            ax_ts_bg.set_ylim(bottom=0, top=cum_uniq[-1] * 1.05)
+        else:
+            ax_ts_bg.set_ylim(bottom=0, top=1)
+        # Salmon right y-axis for the cumulative-unique curve.
+        ax_ts_bg.set_ylabel('# Unique networks', color=LINE_COLOR)
+        ax_ts_bg.tick_params(axis='y', colors=LINE_COLOR,
+                             labelsize='small')
+        ax_ts_bg.spines['right'].set_visible(True)
+        ax_ts_bg.spines['right'].set_color(LINE_COLOR)
+        for side in ('left', 'top', 'bottom'):
+            ax_ts_bg.spines[side].set_visible(False)
+        ax_ts_bg.yaxis.set_major_locator(
+            plt.matplotlib.ticker.MaxNLocator(nbins=3, integer=True))
+
         ax_ts.plot(ts, d_from_M0, 'o-', color='#1f77b4', ms=4, lw=1.4,
                    alpha=0.92)
         ax_ts.set_ylabel(r'Distance to $M_0$')
@@ -404,12 +463,16 @@ def render_figure(plot_data, save_path):
             ax_re_bg.set_ylim(bottom=0, top=rolling.max() * 1.05)
         else:
             ax_re_bg.set_ylim(bottom=0, top=1)
-        # Hide all twin-axis chrome: the curve is decorative, no scale
-        # or legend entry.
-        ax_re_bg.tick_params(axis='y', length=0, labelleft=False,
-                             labelright=False)
-        for spine in ax_re_bg.spines.values():
-            spine.set_visible(False)
+        # Salmon right y-axis for the rolling event-count curve.
+        ax_re_bg.set_ylabel('Rolling average', color=LINE_COLOR)
+        ax_re_bg.tick_params(axis='y', colors=LINE_COLOR,
+                             labelsize='small')
+        ax_re_bg.spines['right'].set_visible(True)
+        ax_re_bg.spines['right'].set_color(LINE_COLOR)
+        for side in ('left', 'top', 'bottom'):
+            ax_re_bg.spines[side].set_visible(False)
+        ax_re_bg.yaxis.set_major_locator(
+            plt.matplotlib.ticker.MaxNLocator(nbins=3, integer=True))
 
         if events:
             xs = [e['t'] for e in events]
@@ -569,6 +632,11 @@ def main():
                         'rate background in panel (b). Default: n (matches '
                         'one Gauss-Seidel round). On --from_pkl, overrides '
                         'the value stored in the .plot.pkl cache.')
+    p.add_argument('--cycle_max_period', type=int, default=10,
+                   help='Largest period (in rounds) the post-hoc cycle '
+                        'detector will search for when annotating M_cycle '
+                        'stars in panel (c). Default: 10. Independent of '
+                        'the simulation-time --no_detect_cycles flag.')
     p.add_argument('--from_pkl', default=None,
                    help='Skip the simulation and replot from an existing '
                         'pickle. Preferred: <stem>.plot.pkl (render-ready '
@@ -635,7 +703,8 @@ def _run_and_cache(args):
           f"events_traced={len(r['trace']['rewire_events'])}")
 
     ma_window = args.ma_window if args.ma_window is not None else args.n
-    plot_data = build_plot_data(payload, ma_window=ma_window)
+    plot_data = build_plot_data(payload, ma_window=ma_window,
+                                cycle_max_period=args.cycle_max_period)
     # Drop the heavy payload now that the plot cache has everything we
     # need; the raw trace is intentionally not persisted to disk.
     del payload
@@ -696,7 +765,8 @@ def _load_for_replot(args):
     legacy_n = payload.get('config', {}).get('n')
     ma_window = (args.ma_window if args.ma_window is not None
                  else (legacy_n if legacy_n is not None else None))
-    plot_data = build_plot_data(payload, ma_window=ma_window)
+    plot_data = build_plot_data(payload, ma_window=ma_window,
+                                cycle_max_period=args.cycle_max_period)
     try:
         with open(plot_path, 'wb') as f:
             pickle.dump(plot_data, f)
