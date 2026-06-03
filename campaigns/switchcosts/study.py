@@ -48,7 +48,7 @@ from rewiring.simulation import run_unified_simulation
 # skipped (P0 is the AA control, P1 is the no-friction degenerate point).
 from campaigns.welfare_dispersion.study import POINTS as WELFARE_POINTS
 
-SWITCHCOST_POINTS = {k: WELFARE_POINTS[k] for k in ('P2', 'P3', 'P4')}
+SWITCHCOST_POINTS = {k: WELFARE_POINTS[k] for k in ('P2', "P2a", 'P3', 'P4')}
 
 N = 100
 C = 4

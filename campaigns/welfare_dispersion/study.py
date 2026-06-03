@@ -56,6 +56,10 @@ POINTS = {
         'b_value': 1.0, 'kappa': 1, 'aisi': 0.05, 'sigma_w': 0.0, 'delta_z': 0.0,
         'b_hetero': False,
     },
+    'P2a': {  # small Delta_A traps
+        'b_value': 1.0, 'kappa': 1, 'aisi': 0.005, 'sigma_w': 0.0, 'delta_z': 0.0,
+        'b_hetero': False,
+    },
     'P3': {  # non-CRS structural
         'b_value': None, 'kappa': 4, 'aisi': 0.0, 'sigma_w': 0.0, 'delta_z': 0.0,
         'b_hetero': True,  # b_i ~ U[0.9, 1.1]
