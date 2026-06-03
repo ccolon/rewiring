@@ -1,22 +1,23 @@
-"""Switching-cost (chi) figure -- main 3 panels + 2 diagnostic panels.
+"""Switching-cost (chi) figure -- main 2 panels + 2 diagnostic panels.
 
 Reads trial-level CSVs from results/switchcosts/ (or a user-supplied directory).
 
 Main panels (manuscript appendix fig:switchcost):
-    (a) Configuration diversity nu_P     vs chi
+    (a) Per-firm rewiring count F        vs chi   (total_rewirings / n)
     (b) Mean terminal cost gap theta     vs chi   (theta_static)
-    (c) Per-firm rewiring count F        vs chi   (total_rewirings / n)
 
 Diagnostic panels (reuse the same data; no new sims needed):
-    (d) Termination breakdown            vs chi   (frac converged + frac cycled)
-    (e) Matched-pair retention           vs chi   (fraction of trials whose
+    (c) Termination breakdown            vs chi   (frac converged + frac cycled)
+    (d) Matched-pair retention           vs chi   (fraction of trials whose
                                                    final configuration equals
                                                    the chi=0 baseline trial at
                                                    the same (tech_seed,
                                                    init_seed); anchored at 1
                                                    for chi=0).
 
-The 6th axis carries a small sample-size table per cell.
+Configuration diversity nu_P is still computed and reported in the per-cell
+summary printout for diagnostic value, but is not plotted: at the campaign's
+sample sizes nu_P saturates at 1 and carries no information.
 
 Two lines per panel (one per parameter point in {P2, P4} -- labels match
 welfare_dispersion_study.py). Markers at each chi value; bars are 95%
@@ -51,13 +52,20 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import FuncFormatter
+
+# chi values whose tick labels we hide on the x axis to declutter (the tick
+# itself stays so the data points remain at their true positions).
+HIDDEN_CHI_LABELS = {0, 0.001, 0.002, 0.005}
 
 
-# Plot style: point label -> (display label, color).
+# Plot style: point label -> (display label, color). Labels kept short so the
+# print-size figure (0.6\linewidth) doesn't overflow; the caption carries the
+# full parameter spec for each point.
 POINT_STYLE = {
-    'P2': ('P2  CRS, $\\kappa=1$, $\\Delta_A=0.05$',  'C0'),
-    'P3': ('P3  HRS, $\\kappa=c\'$, no dispersion',   'C2'),
-    'P4': ('P4  HRS, $\\kappa=1$, compounded',        'C1'),
+    'P2': ('P1: CRS, $\\Delta_A=0.05$', 'C0'),
+    'P3': ('P3 (structural, $\\kappa=c\'$)', 'C2'),
+    'P4': ('P3: HRS, $\\Delta_A=0.05$, $\\sigma_W=0.05$',      'C1'),
 }
 
 
@@ -221,7 +229,8 @@ def plot_panel(ax, summary, mean_col, ci_col, ylabel, title,
         if use_pct:
             y, e = y * 100.0, e * 100.0
         ax.errorbar(x, y, yerr=e, fmt='o-', color=color,
-                    lw=1.8, ms=7, capsize=3, label=label)
+                    lw=2.0, ms=6, capsize=5, capthick=1.5,
+                    elinewidth=1.5, label=label)
 
         if extra is not None:
             for em_col, eci_col, lbl_suffix, ls in extra:
@@ -234,54 +243,23 @@ def plot_panel(ax, summary, mean_col, ci_col, ylabel, title,
                     if e2 is not None:
                         e2 = e2 * 100.0
                 ax.errorbar(x, y2, yerr=e2, fmt='x', color=color, ls=ls,
-                            lw=1.2, ms=6, capsize=2, alpha=0.7,
+                            lw=1.4, ms=7, capsize=3, alpha=0.7,
                             label=f'{label} -- {lbl_suffix}')
 
-    ax.set_xlabel(r'$\chi$ (per-switch hurdle)')
+    ax.set_xlabel(r'Switching cost, $\chi$')
     ax.set_ylabel(ylabel)
     ax.set_title(title, loc='left')
     ax.grid(alpha=0.3)
     if chi_grid is not None and len(chi_grid):
         ax.set_xticks(chi_grid)
-        ax.set_xticklabels([f'{c:g}' for c in chi_grid],
-                           rotation=30, ha='right')
+        labels = [''
+                  if any(abs(c - h) < 1e-9 for h in HIDDEN_CHI_LABELS)
+                  else f'{c:g}'
+                  for c in chi_grid]
+        ax.set_xticklabels(labels, rotation=30, ha='right',
+                           rotation_mode='anchor')
     if log_y:
         ax.set_yscale('log')
-
-
-def render_info_panel(ax, summary, mp_summary, points_to_plot):
-    """6th cell: small table of sample sizes per (point, chi) for diagnostics."""
-    ax.set_axis_off()
-    lines = ["Sample sizes per cell (n_trials | n_techs):"]
-    by_pc = summary.set_index(['point', 'chi'])
-    chis = sorted(summary['chi'].unique())
-    header = "  chi      " + "  ".join(f"{p:>10s}" for p in points_to_plot)
-    lines.append(header)
-    for chi in chis:
-        cells = []
-        for p in points_to_plot:
-            if (p, chi) in by_pc.index:
-                row = by_pc.loc[(p, chi)]
-                cells.append(f"{int(row['theta_n']):>4d}|{int(row['nu_p_n']):>3d}")
-            else:
-                cells.append("   - ")
-        lines.append(f"  {chi:>7.4g}  " + "  ".join(f"{c:>10s}" for c in cells))
-    if not mp_summary.empty:
-        mp_by = mp_summary.set_index(['point', 'chi'])
-        lines.append("")
-        lines.append("Matched-pair n per (point, chi):")
-        lines.append("  chi      " + "  ".join(f"{p:>10s}" for p in points_to_plot))
-        for chi in chis:
-            cells = []
-            for p in points_to_plot:
-                if (p, chi) in mp_by.index:
-                    cells.append(f"{int(mp_by.loc[(p, chi), 'M_n']):>10d}")
-                else:
-                    cells.append(f"{'-':>10s}")
-            lines.append(f"  {chi:>7.4g}  " + "  ".join(cells))
-    ax.text(0.0, 1.0, "\n".join(lines),
-            family='monospace', fontsize=8,
-            transform=ax.transAxes, va='top', ha='left')
 
 
 # =============================================================================
@@ -302,8 +280,8 @@ def main():
                    help='Use symlog x-axis (helpful when chi spans >2 orders of '
                         'magnitude with chi=0 at the left).')
     p.add_argument('--main_only', action='store_true',
-                   help='Render only the 3-panel main figure (a, b, c). '
-                        'Default also renders the 2 diagnostic panels (d, e).')
+                   help='Render only the 2-panel main figure (a, b). '
+                        'Default also renders the 2 diagnostic panels (c, d).')
     args = p.parse_args()
 
     if args.output is None:
@@ -331,38 +309,65 @@ def main():
     chi_grid = sorted(summary['chi'].unique())
 
     if args.main_only:
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4.5),
+        # AER-style sizing for a 0.6\linewidth placement on an A4 page with
+        # 1-inch margins. The on-page figure is ~3.76 inches wide; rendering
+        # at 6.4 inches means LaTeX downscales by ~0.59x, which lands the
+        # tick labels at ~7.6 pt and the axis labels at ~8.8 pt on page.
+        plt.rcParams.update({
+            'font.size':           9,
+            'axes.titlesize':      11,
+            'axes.labelsize':      10,
+            'xtick.labelsize':     9,
+            'ytick.labelsize':     9,
+            'legend.fontsize':     9,
+            'axes.linewidth':      1.0,
+            'xtick.major.width':   1.0,
+            'ytick.major.width':   1.0,
+            'xtick.major.size':    2.25,
+            'ytick.major.size':    2.25,
+        })
+        fig, axes = plt.subplots(1, 2, figsize=(6.4, 3.0),
                                  constrained_layout=True)
         main_axes = axes
+        diag_axes = None
     else:
-        fig, axes = plt.subplots(2, 3, figsize=(15, 9),
+        # 2x2: row 1 main (a, b), row 2 diagnostic (c, d).
+        fig, axes = plt.subplots(2, 2, figsize=(10, 9),
                                  constrained_layout=True)
         main_axes = axes[0]
         diag_axes = axes[1]
 
-    plot_panel(main_axes[0], summary, 'nu_p_mean', 'nu_p_ci',
-               ylabel=r'Configuration diversity $\nu_\mathcal{P}$',
-               title='(a)', points_to_plot=points_to_plot, chi_grid=chi_grid)
-    plot_panel(main_axes[1], summary, 'theta_mean', 'theta_ci',
-               ylabel=r'Terminal cost gap $\theta$ (%)',
-               title='(b)', points_to_plot=points_to_plot, use_pct=True,
+    plot_panel(main_axes[0], summary, 'F_mean', 'F_ci',
+               ylabel=r'Average rewirings per firm, $F$',
+               title='(a) Rewiring count', points_to_plot=points_to_plot,
                chi_grid=chi_grid)
-    plot_panel(main_axes[2], summary, 'F_mean', 'F_ci',
-               ylabel=r'Per-firm rewiring count $F$',
-               title='(c)', points_to_plot=points_to_plot, chi_grid=chi_grid)
+
+    plot_panel(main_axes[1], summary, 'theta_mean', 'theta_ci',
+               ylabel=r'Average final cost gap, $\theta_T$',
+               title='(b) Cost gap', points_to_plot=points_to_plot,
+               use_pct=True, chi_grid=chi_grid)
+    # Add "%" to (b) y-axis tick labels (data is already in percent).
+    main_axes[1].yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{x:g}%'))
+
+    # Legend in panel (a) upper-right. F descends with chi (top-left to
+    # bottom-right), so the upper-right corner stays empty. Compact spacing
+    # so the box stays tight at print size.
+    main_axes[0].legend(loc='upper right', frameon=True, framealpha=0.9,
+                        borderaxespad=0.3, handlelength=1.6, handletextpad=0.5,
+                        labelspacing=0.3, borderpad=0.4)
 
     if not args.main_only:
-        # (d) termination breakdown: frac_converged (solid, errorbar) +
+        # (c) termination breakdown: frac_converged (solid, errorbar) +
         # frac_cycled (dashed, smaller markers).
         plot_panel(diag_axes[0], summary,
                    'frac_conv_mean', 'frac_conv_ci',
                    ylabel='Termination fraction',
-                   title='(d)', points_to_plot=points_to_plot,
+                   title='(c)', points_to_plot=points_to_plot,
                    chi_grid=chi_grid,
                    extra=[('frac_cyc_mean', 'frac_cyc_ci', 'cycled', '--')])
         diag_axes[0].set_ylim(-0.03, 1.03)
 
-        # (e) matched-pair retention vs chi=0.
+        # (d) matched-pair retention vs chi=0.
         if mp_summary.empty:
             diag_axes[1].set_axis_off()
             diag_axes[1].text(0.5, 0.5, '(no chi=0 baseline trials)',
@@ -371,29 +376,18 @@ def main():
         else:
             plot_panel(diag_axes[1], mp_summary, 'M_mean', 'M_ci',
                        ylabel=r'Matched-pair retention vs $\chi=0$',
-                       title='(e)', points_to_plot=points_to_plot,
+                       title='(d)', points_to_plot=points_to_plot,
                        chi_grid=chi_grid)
             diag_axes[1].set_ylim(-0.03, 1.03)
 
-        # (f) sample-size info panel.
-        render_info_panel(diag_axes[2], summary, mp_summary, points_to_plot)
-
     if args.log_x:
         flat_axes = (list(main_axes) +
-                     (list(diag_axes[:2]) if not args.main_only else []))
+                     (list(diag_axes) if diag_axes is not None else []))
         for ax in flat_axes:
             ax.set_xscale('symlog', linthresh=5e-4)
 
-    # Shared legend below the panels.
-    handles, labels = main_axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='lower center', ncol=max(1, len(handles)),
-               bbox_to_anchor=(0.5, -0.04), frameon=False, fontsize=10)
-
     fig.savefig(args.output, dpi=200, bbox_inches='tight')
     print(f"\nFigure -> {args.output}")
-    pdf_out = os.path.splitext(args.output)[0] + '.pdf'
-    fig.savefig(pdf_out, bbox_inches='tight')
-    print(f"Figure -> {pdf_out}")
 
 
 if __name__ == '__main__':
