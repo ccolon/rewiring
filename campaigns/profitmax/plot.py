@@ -8,7 +8,8 @@ Reads every *.csv in `results/profitmax/`. Two series, distinguished by `mode`:
 
 Both share the DRS + link-weight-heterogeneity calibration:
     a = hom 0.5, b = hom 0.9, z = hom 1.0  (Delta_z = 0),
-    c = c' = 4, kappa = 1, sigma_w = 0.2, Delta_A = 0.
+    c = c' = 4, kappa = 1, sigma_w = 0.05, Delta_A = 0,
+    --drs_filter on (symmetric per-firm b*alpha < 1 rejection).
 
 (The Delta_z > 0 alternative was rejected because z_i does not enter the
 profit-max objective, leaving the profit-max curve saturated trivially.
@@ -60,7 +61,7 @@ C_TARGET       = 4
 CC_TARGET      = 4
 MS_TARGET      = 1
 AISI_TARGET    = 0.0
-SIGMAW_TARGET  = 0.2
+SIGMAW_TARGET  = 0.05
 
 CSV_OUT_COLS = ['mode', 'n', 'nu_mean', 'nu_ci_low', 'nu_ci_high',
                 'nonconv_rate', 'n_runs']

@@ -10,16 +10,19 @@
 #
 # Both curves share the *same* DRS+sigma_w calibration:
 #     a = hom 0.5,  b = hom 0.9,  z = hom 1.0   (Delta_z = 0),
-#     c = c' = 4,  kappa = 1,  sigma_w = 0.2,   Delta_A = 0.
+#     c = c' = 4,  kappa = 1,  sigma_w = 0.05,  Delta_A = 0.
 # Rationale: pure-homogeneous (sigma_w = 0) saturates both curves at ~100%
 # diversity from n=10 (uninformative); Delta_z > 0 leaves profit-max
 # saturated since z_i does not enter the profit objective. sigma_w > 0
-# instead introduces *link-weight* heterogeneity that BOTH objectives see
-# (it enters alpha_i = a_i + (1-a_i) sum_j W_ji and through W directly in
-# the sales and price systems), so neither curve trivially saturates and
-# their growth-with-n can be compared on the same axis.
-# Profit-max is restricted to DRS upstream (the simulation driver guards
-# b*alpha < 1); CRS and IRS are inoperative under that objective (see appendix).
+# introduces *link-weight* heterogeneity that BOTH objectives see (it
+# enters alpha_i = a_i + (1-a_i) sum_j W_ji and through W directly in
+# the sales and price systems), so neither curve trivially saturates.
+# sigma_w = 0.05 is chosen as a compromise: column-sum std ~ sigma_w * sqrt(c)
+# = 0.1 brings a non-trivial number of firms close to b*alpha = 1; we then
+# apply --drs_filter so cells/trials with any firm violating b*alpha < 1
+# are dropped *symmetrically* in both modes. Larger sigma_w (e.g. 0.2)
+# pushed nearly every tech matrix into IRS at n=200; smaller sigma_w
+# brought back the saturation problem.
 #
 # Per cell: 50 tech matrices x 50 initial networks = 2,500 trials,
 # split into 5 batches of (TECH_PER_JOB=10, INITS_PER_TECH=50).
@@ -75,7 +78,7 @@ A_CFG="homogeneous:0.5"
 B_CFG="homogeneous:0.9"
 Z_CFG="homogeneous:1.0"   # Delta_z = 0
 AISI=0.0
-SIGMA_W=0.2               # link-weight heterogeneity (operative under both objectives)
+SIGMA_W=0.05              # link-weight heterogeneity (operative under both objectives)
 
 ALL_N=(10 20 50 100 200)
 
@@ -109,7 +112,7 @@ python ${SCRIPT_DIR}/campaigns/diversity/study.py \
     --cc ${CC} --max_swaps ${KAPPA} \
     --aisi_spread ${AISI} --sigma_w ${SIGMA_W} \
     --a_config ${A_CFG} --b_config ${B_CFG} --z_config ${Z_CFG} \
-    --mode ${mode_arg} --series_filter dif_init_only \
+    --mode ${mode_arg} --series_filter dif_init_only --drs_filter \
     --base_seed ${seed} --output ${out}'\""
 
             if $DRY_RUN; then

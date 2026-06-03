@@ -76,7 +76,26 @@ BASE_SEED = 0  # Monte Carlo offset; different values -> independent RNG streams
 # 'dif_init_only' halves runtime when only same_tech_dif_init is needed.
 SERIES_FILTER = 'both'
 
+# If True, skip any (n, tech_idx) whose base_state has max(b*alpha) >= 1, and
+# within the dif_init series skip any trial whose initial state has the same
+# violation. Required for symmetric comparison between mode='full' and
+# mode='full_profitmax' (only the latter checks DRS upstream by default; with
+# this flag both modes drop the SAME tech matrices / initial networks, since
+# the check is deterministic in the seed). Default off so other campaigns are
+# unaffected.
+DRS_FILTER = False
+
 OUTPUT_FILE = "diversity_results.csv"
+
+
+def _drs_ok(network_state, a, b, eps=1e-10):
+    """Return True iff b_i * alpha_i < 1 for every firm i in this network state,
+    where alpha_i = a_i + (1 - a_i) * sum_j W_ji. Mirrors the simulation-side
+    guard in `rewiring.simulation.run_unified_simulation` for mode=
+    'full_profitmax'; lifted to the study layer so the SAME check is applied
+    in both modes when --drs_filter is on."""
+    alpha = a + (1 - a) * np.sum(network_state['W0'], axis=0)
+    return bool(np.all(b * alpha < 1.0 - eps))
 
 
 def _build_tier_array(n, tier_mean, tier_std, rng, tier_dist='poisson'):
@@ -240,6 +259,17 @@ def run_study():
             Wbar = base_state['Wbar']
             AiSi = base_state['AiSi']
 
+            # Symmetric DRS filter: drop this (n, tech_idx) cell if the base
+            # state has any firm with b * alpha >= 1. Deterministic in
+            # (BASE_SEED, n, tech_idx) so cost-min and profit-max runs at the
+            # same seeds skip exactly the same cells -- preserves parity.
+            if DRS_FILTER and not _drs_ok(base_state, a, b):
+                alpha0 = a + (1 - a) * np.sum(base_state['W0'], axis=0)
+                print(f"[skip cell] n={n:2d} tech={tech_idx:2d}: base-state DRS "
+                      f"violation, max(b*alpha)={float(np.max(b * alpha0)):.4f}")
+                done += 2  # accounts for both series being skipped
+                continue
+
             # Per-tech tier-visibility array (only used when MODE == "limited").
             # Build a fresh np.random.Generator from tech_seed to avoid disturbing
             # the global numpy RNG state used by perm_seed inside the simulator.
@@ -319,10 +349,19 @@ def run_study():
             if red_key not in existing_keys and SERIES_FILTER != 'same_init_only':
                 t0 = time.time()
                 final_lists, rounds_list, conv_list, cycle_periods_list, rewires_list, U_T_list = [], [], [], [], [], []
+                n_drs_skipped = 0
                 for trial in range(N_TRIALS):
                     trial_state = generate_random_initial_network(
                         n, Wbar, AiSi, seed=seed_off + 2000 + trial,
                     )
+                    # Symmetric trial-level DRS filter: skip if this initial
+                    # network has b*alpha >= 1 for any firm. Same trial_state
+                    # under both modes (deterministic seed), so both modes
+                    # skip the same trials -- comparison stays on a common
+                    # sample.
+                    if DRS_FILTER and not _drs_ok(trial_state, a, b):
+                        n_drs_skipped += 1
+                        continue
                     result = run_unified_simulation(
                         trial_state, a, b, z, mode=MODE,
                         seed=seed_off + 3000 + trial,
@@ -339,6 +378,15 @@ def run_study():
                     P_T = P_T[P_T > 0]
                     U_T_list.append(float(-np.sum(np.log(P_T))) if P_T.size else float('nan'))
 
+                if not final_lists:
+                    # All trials were dropped by the DRS filter -- write no row;
+                    # plot.py will just see this cell as missing from the sample.
+                    done += 1
+                    print(f"[skip cell] n={n:2d} tech={tech_idx:2d} "
+                          f"same_tech_dif_init: all {N_TRIALS} trial inits "
+                          f"violate DRS")
+                    continue
+
                 diversity = compute_diversity(final_lists)
                 rewires_arr = np.asarray(rewires_list, dtype=float) / float(n)
                 cycled = [cp for cp in cycle_periods_list if isinstance(cp, int) and cp >= 2]
@@ -354,11 +402,13 @@ def run_study():
                 append_row(OUTPUT_FILE, row)
                 done += 1
                 elapsed = time.time() - t0
+                skip_tag = (f"  drs_skipped={n_drs_skipped}/{N_TRIALS}"
+                            if DRS_FILTER and n_drs_skipped else "")
                 print(f"[{done:5d}/{total}] n={n:2d} tech={tech_idx:2d} same_tech_dif_init  "
                       f"diversity={diversity:.3f}  conv={row['frac_converged']:.2f}  "
                       f"cyc={row['frac_cycled']:.2f}(<k>={row['mean_cycle_period']:.1f})  "
                       f"rounds={row['mean_rounds']:.1f}/{row['max_rounds']}  "
-                      f"swaps/firm={row['mean_swaps_per_firm']:.2f}  ({elapsed:.1f}s)")
+                      f"swaps/firm={row['mean_swaps_per_firm']:.2f}{skip_tag}  ({elapsed:.1f}s)")
 
     print("=" * 70)
     print(f"Done. Results saved to {OUTPUT_FILE}")
@@ -416,6 +466,12 @@ def parse_args():
                         choices=['both', 'same_init_only', 'dif_init_only'],
                         help='Which series to compute. dif_init_only halves runtime '
                              'when only same_tech_dif_init is needed.')
+    parser.add_argument('--drs_filter', action='store_true', default=False,
+                        help='Skip (n, tech_idx) cells and dif_init trial inits '
+                             'with any firm having b*alpha >= 1. Required for a '
+                             'fair full vs full_profitmax comparison; the '
+                             'check is deterministic in the seed so both modes '
+                             'drop the same cells/trials.')
     parser.add_argument('--output', type=str, default=None)
     return parser.parse_args()
 
@@ -459,6 +515,8 @@ if __name__ == "__main__":
         BASE_SEED = args.base_seed
     if args.series_filter is not None:
         SERIES_FILTER = args.series_filter
+    if args.drs_filter:
+        DRS_FILTER = True
     if args.output is not None:
         OUTPUT_FILE = args.output
 
