@@ -215,9 +215,15 @@ def run_study():
             # Build technology matrix for this (n, tech_idx) pair.
             # tech_seed = BASE_SEED * 10000 + tech_idx so different BASE_SEED
             # values give independent Monte Carlo streams.
-            # ------------------------------------------------------------------
-            tech_seed = BASE_SEED * 10000 + tech_idx
-            seed_off = BASE_SEED * 10000
+            #
+            # Wrap into the numpy MT19937 seed range [0, 2**32) so this works
+            # for any int BASE_SEED, including negative values (a positive
+            # BASE_SEED <= ~4.3e5 leaves the result unchanged, so existing
+            # campaigns are bit-identical). Without this, BASE_SEED < 0
+            # crashed `np.random.seed(tech_seed)` mid-run.
+            _SEED_MOD = 1 << 32
+            tech_seed = (BASE_SEED * 10000 + tech_idx) % _SEED_MOD
+            seed_off = (BASE_SEED * 10000) % _SEED_MOD
 
             # Draw economic parameters before generate_base_network re-seeds.
             random.seed(tech_seed)
