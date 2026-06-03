@@ -8,14 +8,18 @@
 #     mode=full_profitmax    profit-maximisation variant (Eqs. price_profitmax--
 #                            profit_profitmax in the appendix)
 #
-# Both curves share the *same* DRS pure-homogeneous calibration:
-#     a = hom 0.5,  b = hom 0.9,  z = hom 1.0,
-#     c = c' = 4,  kappa = 1,  sigma_w = 0,  Delta_A = 0.
+# Both curves share the *same* DRS+sigma_w calibration:
+#     a = hom 0.5,  b = hom 0.9,  z = hom 1.0   (Delta_z = 0),
+#     c = c' = 4,  kappa = 1,  sigma_w = 0.2,   Delta_A = 0.
+# Rationale: pure-homogeneous (sigma_w = 0) saturates both curves at ~100%
+# diversity from n=10 (uninformative); Delta_z > 0 leaves profit-max
+# saturated since z_i does not enter the profit objective. sigma_w > 0
+# instead introduces *link-weight* heterogeneity that BOTH objectives see
+# (it enters alpha_i = a_i + (1-a_i) sum_j W_ji and through W directly in
+# the sales and price systems), so neither curve trivially saturates and
+# their growth-with-n can be compared on the same axis.
 # Profit-max is restricted to DRS upstream (the simulation driver guards
 # b*alpha < 1); CRS and IRS are inoperative under that objective (see appendix).
-# Under pure-homogeneous calibration z_i and A_i(S_i) are inoperative under
-# both objectives, isolating the demand-repositioning channel that the
-# appendix highlights for profit-max.
 #
 # Per cell: 50 tech matrices x 50 initial networks = 2,500 trials,
 # split into 5 batches of (TECH_PER_JOB=10, INITS_PER_TECH=50).
@@ -69,9 +73,9 @@ CC=4
 KAPPA=1
 A_CFG="homogeneous:0.5"
 B_CFG="homogeneous:0.9"
-Z_CFG="homogeneous:1.0"
+Z_CFG="homogeneous:1.0"   # Delta_z = 0
 AISI=0.0
-SIGMA_W=0.0
+SIGMA_W=0.2               # link-weight heterogeneity (operative under both objectives)
 
 ALL_N=(10 20 50 100 200)
 

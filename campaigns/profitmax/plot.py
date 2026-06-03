@@ -6,9 +6,14 @@ Reads every *.csv in `results/profitmax/`. Two series, distinguished by `mode`:
     mode == 'full_profitmax'   -> profit-maximisation variant (Eqs.
                                    price_profitmax--profit_profitmax)
 
-Both share the appendix calibration:
-    a = hom 0.5, b = hom 0.9, z = hom 1.0, c = c' = 4, kappa = 1,
-    sigma_w = 0, Delta_A = 0.
+Both share the DRS + link-weight-heterogeneity calibration:
+    a = hom 0.5, b = hom 0.9, z = hom 1.0  (Delta_z = 0),
+    c = c' = 4, kappa = 1, sigma_w = 0.2, Delta_A = 0.
+
+(The Delta_z > 0 alternative was rejected because z_i does not enter the
+profit-max objective, leaving the profit-max curve saturated trivially.
+sigma_w enters both objectives' GE through alpha_i and through the sales /
+price systems directly, so neither curve saturates by construction.)
 
 For each (mode, n) cell, the diversity ν_P value is one observation per
 technology matrix (built from `same_tech_dif_init`). We report mean +/- 1.96 *
@@ -55,7 +60,7 @@ C_TARGET       = 4
 CC_TARGET      = 4
 MS_TARGET      = 1
 AISI_TARGET    = 0.0
-SIGMAW_TARGET  = 0.0
+SIGMAW_TARGET  = 0.2
 
 CSV_OUT_COLS = ['mode', 'n', 'nu_mean', 'nu_ci_low', 'nu_ci_high',
                 'nonconv_rate', 'n_runs']
