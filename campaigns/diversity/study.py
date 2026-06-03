@@ -388,10 +388,13 @@ def parse_args():
     parser.add_argument('--z_config', type=str, default=None,
                         help='e.g. homogeneous:1.0 or uniform:0.5:2.0')
     parser.add_argument('--mode', type=str, default=None,
-                        choices=['full', 'limited', 'naive_limited', 'aa'],
-                        help='Anticipation mode: full (default), limited '
-                             '(boundary-conditioned partial GE; needs --tier_mean), '
-                             'naive_limited, or aa.')
+                        choices=['full', 'limited', 'naive_limited', 'aa',
+                                 'full_profitmax'],
+                        help='Anticipation/objective mode: full (default), '
+                             'limited (boundary-conditioned partial GE; needs '
+                             '--tier_mean), naive_limited, aa, or '
+                             "full_profitmax (appendix 'Profit maximisation' "
+                             '-- DRS only).')
     parser.add_argument('--tier_mean', type=float, default=None,
                         help='Mean tier visibility (used when mode=limited/naive_limited).')
     parser.add_argument('--tier_std', type=float, default=None,

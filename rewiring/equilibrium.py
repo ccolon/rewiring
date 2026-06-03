@@ -1,13 +1,21 @@
 """General-equilibrium computation.
 
 Public API:
-    get_alpha                -- alpha_i = a_i + (1-a_i) * sum_j W_ji
-    compute_equilibrium_crs  -- specialised solver for b=1, alpha=1 (CRS, column sums = 1)
-    compute_equilibrium_full -- general solver for heterogeneous (a, b, z)
-    compute_adjusted_z       -- z_i scaled by the AiSi multiplier of the active supplier set
-    calculate_utility        -- -sum_i p_i over positive prices
-    compute_static_gap       -- per-firm "best-attainable cost given current state"
-                                (theta_static query for terminal configurations)
+    get_alpha                     -- alpha_i = a_i + (1-a_i) * sum_j W_ji
+    compute_equilibrium_crs       -- specialised solver for b=1, alpha=1 (CRS, column sums = 1)
+    compute_equilibrium_full      -- general solver for heterogeneous (a, b, z)
+                                     (cost-min / contestability baseline)
+    compute_equilibrium_profitmax -- profit-maximisation variant (appendix
+                                     "Profit maximisation"): sales become a
+                                     linear system with profits rebated to
+                                     households; price constant changes from
+                                     alpha^{b*alpha} to b^{-b*alpha}.
+    compute_adjusted_z            -- z_i scaled by the AiSi multiplier of the
+                                     active supplier set
+    calculate_utility             -- -sum_i p_i over positive prices
+    compute_static_gap            -- per-firm "best-attainable cost given current
+                                     state" (theta_static query for terminal
+                                     configurations)
 """
 
 from itertools import combinations
@@ -107,6 +115,84 @@ def compute_equilibrium_full(a: np.ndarray, b: np.ndarray, z: np.ndarray,
     p = np.exp(log_p)
 
     return {"X": v / p, "P": p}
+
+
+def compute_equilibrium_profitmax(a: np.ndarray, b: np.ndarray, z: np.ndarray,
+                                  W: np.ndarray, n: int, L: float = None) -> dict:
+    """Profit-maximisation general equilibrium (appendix "Profit maximisation").
+
+    Replaces the cost-minimisation / contestability baseline
+    (`compute_equilibrium_full`) with firms that price at marginal cost and
+    rebate profits to households. The wage stays as numeraire (h=1), matching
+    the baseline.
+
+    Equations (with alpha_i = a_i + (1-a_i) sum_j W_ji = tilde a_i):
+
+        Price :  p_i = (z_i * b_i^{b_i alpha_i})^{-1}
+                       * v_i^{1 - b_i alpha_i}
+                       * prod_j p_j^{b_i (1-a_i) W_ji}                     (1)
+        Sales :  v_i = B/n + sum_j (1 - a_j) b_j W_ij v_j                  (2)
+        Budget:  B   = L + sum_i v_i (1 - b_i alpha_i)                     (3)
+        Labour:  L   = sum_i a_i b_i v_i                                   (4)
+        Profit:  pi_i = v_i (1 - b_i alpha_i)                              (5)
+
+    Differences vs. `compute_equilibrium_full` (only two):
+      - Price constant: b_i^{-b_i alpha_i} replaces alpha_i^{b_i alpha_i}
+        (i.e. RHS gains  -b*alpha*log(b)  in place of  +b*alpha*log(alpha)).
+      - Sales equation is a *linear system* in v rather than a Perron-Frobenius
+        eigenproblem, because the budget B now contains rebated profits.
+
+    Algorithm:
+      1. Solve (I - W diag((1-a) b)) w_vec = 1.
+      2. Pin scale via labour clearing L = sum_i a_i b_i v_i, default L = n
+         to match the baseline normalisation (kappa = n / sum a*v/alpha).
+         Hence B = n * L / ((a*b) . w_vec)  and  v = (B/n) w_vec.
+         The budget identity (3) then holds automatically by Walras' law.
+      3. Solve the same log-linear price system as the baseline with the
+         modified constant.
+
+    Returns:
+        {'X': v/p, 'P': p, 'v': v, 'pi': pi}
+
+    Notes:
+      - Under CRS with column sums of W equal to 1 (b_i = 1, alpha_i = 1)
+        profits collapse to zero and this function returns the same v, p as
+        `compute_equilibrium_full` (modulo floating-point).
+      - IRS (b_i alpha_i > 1) makes the profit objective ill-posed (see
+        appendix) and is rejected upstream by `run_unified_simulation`'s
+        guard, not here.
+    """
+    if L is None:
+        L = float(n)
+
+    alpha = get_alpha(a, W)
+
+    # ----- Sales: linear system (I - W diag((1-a) b)) w_vec = 1, then scale.
+    # W * D[newaxis, :] multiplies each column j of W by D_j.
+    D = (1.0 - a) * b                                            # shape (n,)
+    A_v = np.eye(n) - W * D[np.newaxis, :]
+    w_vec = np.linalg.solve(A_v, np.ones(n))
+
+    # Labour clearing pins B:  L = (B/n) * (a*b) . w_vec   =>   B = n*L / (ab @ w).
+    ab_w = float(np.dot(a * b, w_vec))
+    if abs(ab_w) < EPSILON:
+        raise ValueError(
+            "Labour-clearing denominator (a*b) . w is ~0; cannot pin B."
+        )
+    B = n * L / ab_w
+    v = (B / n) * w_vec
+
+    # ----- Price equation: same A_matrix as baseline; only the constant changes.
+    # Baseline RHS constant:    + b * alpha * log(alpha)
+    # Profit-max RHS constant:  - b * alpha * log(b)
+    A_matrix = np.eye(n) - (b * (1 - a))[:, np.newaxis] * W.T
+    b_vector = -np.log(z) - b * alpha * np.log(b) + (1 - b * alpha) * np.log(v)
+    log_p = np.linalg.solve(A_matrix, b_vector)
+    p = np.exp(log_p)
+
+    pi = v * (1.0 - b * alpha)
+
+    return {"X": v / p, "P": p, "v": v, "pi": pi}
 
 
 def calculate_utility(eq: dict) -> float:

@@ -21,6 +21,7 @@ from .equilibrium import (
     compute_adjusted_z,
     compute_equilibrium_crs,
     compute_equilibrium_full,
+    compute_equilibrium_profitmax,
 )
 from .networks import build_W_from_suppliers
 from .parameters import EPSILON
@@ -114,6 +115,13 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
     - 'limited': boundary-conditioned partial equilibrium on the tier
                  neighborhood of the hypothetical graph.
     - 'naive_limited': legacy island-only partial equilibrium.
+    - 'full_profitmax': solve compute_equilibrium_profitmax on the hypothetical
+                 W; the firm picks the supplier set that maximises its own
+                 anticipated profit pi_i = v_i * (1 - b_i alpha_i). We return
+                 -pi_i from `candidate_cost` so the existing minimisation
+                 framework selects max-profit. Restricted to DRS (b * alpha
+                 < 1 elementwise) and chi == 0 -- both checked at entry.
+                 Appendix "Profit maximisation".
 
     Args:
         network_state: dict from generate_base_network.
@@ -131,12 +139,29 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
              baseline. The hurdle stacks linearly with the number of swaps m
              (relevant only when max_swaps > 1).
     """
-    if mode not in ("aa", "full", "limited", "naive_limited"):
+    if mode not in ("aa", "full", "limited", "naive_limited", "full_profitmax"):
         raise ValueError(
-            f"Unknown mode: {mode!r}. Use 'aa', 'full', 'limited', or 'naive_limited'."
+            f"Unknown mode: {mode!r}. Use 'aa', 'full', 'limited', "
+            f"'naive_limited', or 'full_profitmax'."
         )
     if mode in ("limited", "naive_limited") and tier is None:
         raise ValueError(f"tier must be provided for mode={mode!r}.")
+    if mode == "full_profitmax":
+        # Profit-max is only well-posed under DRS (1 - b*alpha > 0 strict),
+        # and the per-switch chi hurdle has no sensible semantics when the
+        # objective flips sign. Both are guarded here so the appendix
+        # experiment can't be silently mis-run.
+        if chi != 0.0:
+            raise ValueError(
+                "chi != 0 is unsupported in mode='full_profitmax' "
+                "(see appendix 'Profit maximisation')."
+            )
+        alpha0 = a + (1 - a) * np.sum(network_state['W0'], axis=0)
+        if np.any(b * alpha0 >= 1.0 - EPSILON):
+            raise ValueError(
+                "mode='full_profitmax' requires DRS: b * alpha < 1 elementwise. "
+                f"got max(b*alpha)={float(np.max(b * alpha0)):.6f}."
+            )
 
     if seed is not None:
         random.seed(seed)
@@ -152,14 +177,28 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
     if mode in ("limited", "naive_limited"):
         tier_arr = np.full(n, int(tier)) if np.isscalar(tier) else np.asarray(tier, dtype=int)
 
+    # GE solver dispatched by mode. 'full_profitmax' uses the appendix's
+    # profit-maximisation equilibrium (linear-system sales + rebated profits);
+    # all other modes use the cost-min baseline.
+    def _solve_eq(adj_z_arg, W_arg):
+        if mode == "full_profitmax":
+            return compute_equilibrium_profitmax(a, b, adj_z_arg, W_arg, n)
+        return compute_equilibrium_full(a, b, adj_z_arg, W_arg, n)
+
     adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
-    eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+    eq = _solve_eq(adjusted_z, W)
     initial_utility = calculate_utility(eq)
 
     one_minus_a = 1 - a
 
     def candidate_cost(id_firm, candidate_set):
-        """Cost of id_firm if its supplier set were `candidate_set`, under mode."""
+        """Cost of id_firm if its supplier set were `candidate_set`, under mode.
+
+        In 'full_profitmax' the returned scalar is -pi_i so that the existing
+        strict-decrease test (cost < current_cost - EPSILON) selects the
+        candidate that strictly INCREASES anticipated profit pi_i. All other
+        modes return a real cost in the usual sense.
+        """
         W_col = np.zeros(n)
         for s in candidate_set:
             W_col[s] = Wbar[s, id_firm]
@@ -168,7 +207,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         if mode == "aa":
             return float(np.prod(np.power(eq['P'], one_minus_a[id_firm] * W_col)) / test_z)
 
-        # For full / limited variants: build W_test by replacing firm i's column
+        # For full / limited / full_profitmax: build W_test by replacing firm i's column
         W_test = W.copy()
         W_test[:, id_firm] = W_col
 
@@ -179,6 +218,10 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
         if mode == "full":
             new_eq = compute_equilibrium_full(a, b, tmp_adjusted_z, W_test, n)
             return float(new_eq['P'][id_firm])
+
+        if mode == "full_profitmax":
+            new_eq = compute_equilibrium_profitmax(a, b, tmp_adjusted_z, W_test, n)
+            return -float(new_eq['pi'][id_firm])
 
         # Tier neighborhood on the hypothetical graph (used by both limited variants)
         M_test = (W_test != 0).astype(np.int8)
@@ -292,7 +335,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
             if proposals:
                 W = build_W_from_suppliers(supplier_id_list, Wbar)
                 adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
-                eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+                eq = _solve_eq(adjusted_z, W)
                 np.minimum(min_prices, eq['P'], out=min_prices)
                 if trace:
                     trace_prices.append(eq['P'].copy())
@@ -307,7 +350,7 @@ def run_unified_simulation(network_state, a, b, z, mode="aa", seed=None,
                     _apply_swap(id_firm, best_removes, best_adds)
                     W = build_W_from_suppliers(supplier_id_list, Wbar)
                     adjusted_z = compute_adjusted_z(AiSi, supplier_id_list, z)
-                    eq = compute_equilibrium_full(a, b, adjusted_z, W, n)
+                    eq = _solve_eq(adjusted_z, W)
                     rewirings_this_round += len(best_adds)
                     total_rewirings += len(best_adds)
                     per_firm_swaps[id_firm] += 1
