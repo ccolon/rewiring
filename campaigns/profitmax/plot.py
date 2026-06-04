@@ -1,20 +1,15 @@
-"""Single-panel diversity-vs-n figure for the appendix "Profit maximisation"
-(fig:profitmax).
+"""Single-curve diversity-vs-n figure for the appendix "Profit maximisation"
+(fig:profitmax) -- profit-max only.
 
-Reads every *.csv in `results/profitmax/`. Two series, distinguished by `mode`:
-    mode == 'full'             -> cost-minimisation baseline
-    mode == 'full_profitmax'   -> profit-maximisation variant (Eqs.
-                                   price_profitmax--profit_profitmax)
+Reads every *.csv in `results/profitmax/` and plots whichever
+mode='full_profitmax' n-cells are present. Cost-min rows in the same
+directory (if any) are ignored. This keeps the plot working off partial
+data: any (n) value without a profit-max CSV is silently skipped rather
+than rendered as a gap.
 
-Both share the DRS + link-weight-heterogeneity calibration:
+Calibration (must match launch.sh's `--drs_filter` run):
     a = hom 0.5, b = hom 0.9, z = hom 1.0  (Delta_z = 0),
-    c = c' = 4, kappa = 1, sigma_w = 0.05, Delta_A = 0,
-    --drs_filter on (symmetric per-firm b*alpha < 1 rejection).
-
-(The Delta_z > 0 alternative was rejected because z_i does not enter the
-profit-max objective, leaving the profit-max curve saturated trivially.
-sigma_w enters both objectives' GE through alpha_i and through the sales /
-price systems directly, so neither curve saturates by construction.)
+    c = c' = 4, kappa = 1, sigma_w = 0.05, Delta_A = 0.
 
 For each (mode, n) cell, the diversity ν_P value is one observation per
 technology matrix (built from `same_tech_dif_init`). We report mean +/- 1.96 *
@@ -48,9 +43,9 @@ DEFAULT_DATA_DIR = os.path.join(REPO_ROOT, 'results', 'profitmax')
 N_VALUES = [10, 20, 50, 100, 200]
 
 # Series spec: (mode_key, label, color, marker, linestyle).
+# Profit-max only -- cost-min CSVs in the same directory are ignored.
 SERIES = [
-    ('full',           r'Cost minimisation (baseline)', 'C0', 'o', '-'),
-    ('full_profitmax', r'Profit maximisation',          'C3', 's', '-'),
+    ('full_profitmax', r'Profit maximisation', 'C3', 's', '-'),
 ]
 
 # Filter targets (must match launch.sh).
