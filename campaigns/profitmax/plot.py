@@ -1,23 +1,25 @@
-"""Single-curve diversity-vs-n figure for the appendix "Profit maximisation"
-(fig:profitmax) -- profit-max only.
+"""Diversity-vs-n figure for the appendix "Profit maximisation"
+(fig:profitmax) -- profit-max only, one curve per sigma_w.
 
 Reads every *.csv in `results/profitmax/` and plots whichever
-mode='full_profitmax' n-cells are present. Cost-min rows in the same
-directory (if any) are ignored. This keeps the plot working off partial
-data: any (n) value without a profit-max CSV is silently skipped rather
-than rendered as a gap.
+mode='full_profitmax' n-cells are present, grouped by `sigma_w`: each
+distinct sigma_w value found in the data becomes its own series. Cost-min
+rows in the same directory (if any) are ignored. This keeps the plot
+working off partial data: any (sigma_w, n) cell without a profit-max CSV
+is silently skipped rather than rendered as a gap.
 
 Calibration (must match launch.sh's `--drs_filter` run):
     a = hom 0.5, b = hom 0.9, z = hom 1.0  (Delta_z = 0),
-    c = c' = 4, kappa = 1, sigma_w = 0.05, Delta_A = 0.
+    c = c' = 4, kappa = 1, Delta_A = 0.
+    sigma_w is NOT filtered -- every value present is drawn as a curve.
 
-For each (mode, n) cell, the diversity ν_P value is one observation per
+For each (sigma_w, n) cell, the diversity ν_P value is one observation per
 technology matrix (built from `same_tech_dif_init`). We report mean +/- 1.96 *
 SEM across tech matrices, as in `campaigns/diversity_size_alt/plot.py`.
 
 Writes:
     figure_profitmax.{pdf,png}
-    profitmax_data.csv         (long-format summary)
+    profitmax_data.csv         (long-format summary, one row per sigma_w x n)
 
 Run from anywhere (defaults to results/profitmax/):
     python campaigns/profitmax/plot.py
@@ -39,16 +41,21 @@ REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 DEFAULT_DATA_DIR = os.path.join(REPO_ROOT, 'results', 'profitmax')
 
 
-# The (mode, n)-grid we expect from launch.sh.
+# The n-grid we expect from launch.sh.
 N_VALUES = [10, 20, 50, 100, 200]
 
-# Series spec: (mode_key, label, color, marker, linestyle).
 # Profit-max only -- cost-min CSVs in the same directory are ignored.
-SERIES = [
-    ('full_profitmax', r'Profit maximisation', 'C3', 's', '-'),
-]
+# Curves are split by sigma_w (one series per distinct value in the data).
+MODE = 'full_profitmax'
 
-# Filter targets (must match launch.sh).
+# Per-series styling, assigned by sigma_w rank. Colors are sampled from a
+# sequential colormap so the eye reads low -> high sigma_w; markers cycle so
+# series stay distinguishable in greyscale.
+CMAP    = 'viridis'
+MARKERS = ['o', 's', '^', 'D', 'v', 'P', 'X', '*']
+
+# Filter targets (must match launch.sh). sigma_w is intentionally absent:
+# every sigma_w present in the data is drawn as its own curve.
 A_SHORT_TARGET = 'hom:0.5'
 B_SHORT_TARGET = 'hom:0.9'
 Z_SHORT_TARGET = 'hom:1.0'
@@ -56,9 +63,8 @@ C_TARGET       = 4
 CC_TARGET      = 4
 MS_TARGET      = 1
 AISI_TARGET    = 0.0
-SIGMAW_TARGET  = 0.05
 
-CSV_OUT_COLS = ['mode', 'n', 'nu_mean', 'nu_ci_low', 'nu_ci_high',
+CSV_OUT_COLS = ['sigma_w', 'n', 'nu_mean', 'nu_ci_low', 'nu_ci_high',
                 'nonconv_rate', 'n_runs']
 
 
@@ -109,15 +115,18 @@ def load_data(data_dir):
         (df['b_short'] == B_SHORT_TARGET) &
         (df['z_short'] == Z_SHORT_TARGET) &
         (df['max_swaps'] == MS_TARGET) &
-        np.isclose(df['aisi_spread'].astype(float), AISI_TARGET, atol=1e-9) &
-        np.isclose(df['sigma_w'].astype(float),    SIGMAW_TARGET, atol=1e-9)
+        np.isclose(df['aisi_spread'].astype(float), AISI_TARGET, atol=1e-9)
     ].copy()
     print(f"Loaded {len(paths)} CSVs -> {len(df)} matching rows from {data_dir}")
     return df
 
 
-def cell_summary(df, mode, n):
-    sub = df[(df['mode'] == mode) & (df['n'] == n)]
+def cell_summary(df, sigma_w, n):
+    sub = df[
+        (df['mode'] == MODE)
+        & np.isclose(df['sigma_w'].astype(float), sigma_w, atol=1e-9)
+        & (df['n'] == n)
+    ]
     if len(sub) == 0:
         return None
     vals = sub['diversity'].astype(float).to_numpy()
@@ -136,16 +145,38 @@ def cell_summary(df, mode, n):
     }
 
 
-def aggregate(df):
+def sigma_values_present(df):
+    """Sorted distinct sigma_w among profit-max rows (rounded to kill dupes)."""
+    pm = df[df['mode'] == MODE]
+    return sorted({round(float(v), 9) for v in pm['sigma_w'].dropna()})
+
+
+def build_series(sigma_values):
+    """One style dict per sigma_w, colored by rank along CMAP."""
+    cmap = plt.get_cmap(CMAP)
+    k = len(sigma_values)
+    series = []
+    for i, sw in enumerate(sigma_values):
+        frac = 0.1 + 0.8 * (i / (k - 1)) if k > 1 else 0.25
+        series.append({
+            'sigma_w': sw,
+            'label':   f'{sw:g}',
+            'color':   cmap(frac),
+            'marker':  MARKERS[i % len(MARKERS)],
+        })
+    return series
+
+
+def aggregate(df, sigma_values):
     rows = []
     lookup = {}
-    for (mode, _label, _color, _marker, _ls) in SERIES:
+    for sw in sigma_values:
         for n in N_VALUES:
-            s = cell_summary(df, mode, n)
+            s = cell_summary(df, sw, n)
             if s is None:
                 continue
             rec = {
-                'mode': mode, 'n': n,
+                'sigma_w': sw, 'n': n,
                 'nu_mean':      s['mean'],
                 'nu_ci_low':    s['ci_low'],
                 'nu_ci_high':   s['ci_high'],
@@ -153,7 +184,7 @@ def aggregate(df):
                 'n_runs':       s['n_runs'],
             }
             rows.append(rec)
-            lookup[(mode, n)] = rec
+            lookup[(sw, n)] = rec
     return rows, lookup
 
 
@@ -161,7 +192,7 @@ def aggregate(df):
 # Plotting
 # -----------------------------------------------------------------------------
 
-def render_figure(lookup, save_path):
+def render_figure(series, lookup, save_path):
     plt.rcParams.update({
         'font.size':       11,
         'axes.titlesize':  12,
@@ -172,10 +203,11 @@ def render_figure(lookup, save_path):
     })
     fig, ax = plt.subplots(figsize=(6.4, 4.4), constrained_layout=True)
 
-    for (mode, label, color, marker, ls) in SERIES:
+    for spec in series:
+        sw = spec['sigma_w']
         ns, means, ci_lo, ci_hi = [], [], [], []
         for n in N_VALUES:
-            rec = lookup.get((mode, n))
+            rec = lookup.get((sw, n))
             if rec is None:
                 continue
             ns.append(n)
@@ -189,8 +221,8 @@ def render_figure(lookup, save_path):
         err_lo = means - np.array(ci_lo)
         err_hi = np.array(ci_hi) - means
         ax.errorbar(ns, means, yerr=[err_lo, err_hi],
-                    fmt=marker, ls=ls, color=color, lw=1.8, ms=8,
-                    capsize=3, label=label, alpha=0.95)
+                    fmt=spec['marker'], ls='-', color=spec['color'],
+                    lw=1.8, ms=7, capsize=3, label=spec['label'], alpha=0.95)
 
     ax.set_xscale('log')
     ax.set_xticks(N_VALUES)
@@ -201,7 +233,7 @@ def render_figure(lookup, save_path):
     ax.yaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=0))
     ax.grid(alpha=0.3)
     ax.axhline(0, color='black', lw=0.6, alpha=0.4)
-    ax.legend(loc='upper left', framealpha=0.95)
+    ax.legend(title=r'$\sigma_w$', loc='upper left', framealpha=0.95)
 
     pdf_path = save_path
     png_path = os.path.splitext(save_path)[0] + '.png'
@@ -234,7 +266,11 @@ def main():
     csv_path = args.csv_output or os.path.join(data_dir, 'profitmax_data.csv')
 
     df = load_data(data_dir)
-    rows, lookup = aggregate(df)
+    sigma_values = sigma_values_present(df)
+    print(f"sigma_w series present: "
+          f"{', '.join(f'{v:g}' for v in sigma_values) or '(none)'}")
+    series = build_series(sigma_values)
+    rows, lookup = aggregate(df, sigma_values)
 
     print()
     print("=== Per-cell summary ===")
@@ -244,7 +280,7 @@ def main():
         if rec['nonconv_rate'] > 0.05:
             warn = '  WARN (>5%)'
             any_warn = True
-        print(f"  mode={rec['mode']:14}  n={rec['n']:>3}  "
+        print(f"  sigma_w={rec['sigma_w']:<6g}  n={rec['n']:>3}  "
               f"nu={100*rec['nu_mean']:>5.1f}%  "
               f"CI=[{100*rec['nu_ci_low']:>5.1f}%, "
               f"{100*rec['nu_ci_high']:>5.1f}%]  "
@@ -257,7 +293,7 @@ def main():
     out.to_csv(csv_path, index=False)
     print(f"\nWrote {csv_path}")
 
-    render_figure(lookup, save_path)
+    render_figure(series, lookup, save_path)
 
 
 if __name__ == '__main__':
